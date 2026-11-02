@@ -1,0 +1,16 @@
+[package]
+name = "iroh-host"
+description = "Standalone Iroh host that forwards a local HTTP origin to paired devices"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+iroh.workspace = true
+iroh-transport.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,82 @@
+name: Build Validation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.99.1"
+  RUST_MSRV: "1.91.0"
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: iroh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+          rustup override set "$RUST_TOOLCHAIN"
+          cargo --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            iroh/target
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('iroh/Cargo.lock') }}
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lockfile is current
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: CLI smoke test
+        run: |
+          cargo build --locked -p iroh-host
+          ./target/debug/iroh-host --version
+          id_first=$(./target/debug/iroh-host identity --data-dir "$RUNNER_TEMP/smoke")
+          id_second=$(./target/debug/iroh-host identity --data-dir "$RUNNER_TEMP/smoke")
+          test -n "$id_first" && test "$id_first" = "$id_second"
+          test "$(stat -c %a "$RUNNER_TEMP/smoke/identity.key")" = "600"
+          test "$(stat -c %a "$RUNNER_TEMP/smoke")" = "700"
+          # No origin is running, so doctor must report the failure and exit non-zero.
+          if ./target/debug/iroh-host doctor --data-dir "$RUNNER_TEMP/smoke" --origin http://127.0.0.1:9; then
+            echo "doctor should fail without a reachable origin" && exit 1
+          fi
+
+  msrv:
+    name: Rust minimum supported version
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: iroh
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install MSRV toolchain
+        run: |
+          rustup toolchain install "$RUST_MSRV" --profile minimal
+          rustup override set "$RUST_MSRV"
+      - name: Check
+        run: cargo check --workspace --locked

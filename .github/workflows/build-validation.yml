@@ -3,6 +3,7 @@ name: Build Validation
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,7 +19,7 @@ env:
 
 jobs:
   rust:
-    name: Rust (fmt, clippy, test)
+    name: Rust (fmt, clippy, test, smoke)
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -39,35 +40,90 @@ jobs:
             ~/.cargo/git
             iroh/target
           key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('iroh/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+
+      # If Cargo.lock is stale, regenerate it so the remaining checks still run, publish the
+      # corrected file as an artifact, and fail the run at the end.
+      - name: Lockfile is current
+        id: lock
+        run: |
+          if cargo metadata --locked --format-version 1 > /dev/null; then
+            echo "flag=--locked" >> "$GITHUB_OUTPUT"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            cargo update --workspace
+            echo "flag=" >> "$GITHUB_OUTPUT"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "::error file=iroh/Cargo.lock::Cargo.lock is out of date. Download the 'corrected-cargo-lock' artifact from this run and commit it as iroh/Cargo.lock."
+          fi
+
+      - name: Upload corrected Cargo.lock
+        if: steps.lock.outputs.stale == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: corrected-cargo-lock
+          path: iroh/Cargo.lock
 
       - name: Formatting
+        id: fmt
+        continue-on-error: true
         run: cargo fmt --all --check
 
-      - name: Lockfile is current
-        run: cargo metadata --locked --format-version 1 > /dev/null
-
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets ${{ steps.lock.outputs.flag }} -- -D warnings
 
       - name: Tests
-        run: cargo test --workspace --locked
+        id: test
+        continue-on-error: true
+        run: cargo test --workspace ${{ steps.lock.outputs.flag }}
 
       - name: CLI smoke test
+        id: smoke
+        continue-on-error: true
         run: |
-          cargo build --locked -p iroh-host
+          set -eux
+          cargo build ${{ steps.lock.outputs.flag }} -p iroh-host
           ./target/debug/iroh-host --version
           id_first=$(./target/debug/iroh-host identity --data-dir "$RUNNER_TEMP/smoke")
           id_second=$(./target/debug/iroh-host identity --data-dir "$RUNNER_TEMP/smoke")
           test -n "$id_first" && test "$id_first" = "$id_second"
           test "$(stat -c %a "$RUNNER_TEMP/smoke/identity.key")" = "600"
           test "$(stat -c %a "$RUNNER_TEMP/smoke")" = "700"
-          # No origin is running, so doctor must report the failure and exit non-zero.
+          test "$(stat -c %a "$RUNNER_TEMP/smoke/state.json" 2>/dev/null || echo none)" = "none"
+          # No origin is listening on port 9, so doctor must report a failure and exit non-zero.
           if ./target/debug/iroh-host doctor --data-dir "$RUNNER_TEMP/smoke" --origin http://127.0.0.1:9; then
             echo "doctor should fail without a reachable origin" && exit 1
           fi
+          test "$(stat -c %a "$RUNNER_TEMP/smoke/state.json")" = "600"
+
+      - name: Summary
+        if: always()
+        env:
+          LOCK: ${{ steps.lock.outputs.stale == 'false' && 'success' || 'failure' }}
+          FMT: ${{ steps.fmt.outcome }}
+          CLIPPY: ${{ steps.clippy.outcome }}
+          TEST: ${{ steps.test.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+        run: |
+          mark() { [ "$1" = "success" ] && echo "pass" || echo "FAIL ($1)"; }
+          {
+            echo "## Build Validation"
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Cargo.lock up to date | $(mark "$LOCK") |"
+            echo "| Formatting | $(mark "$FMT") |"
+            echo "| Clippy (warnings are errors) | $(mark "$CLIPPY") |"
+            echo "| Unit tests | $(mark "$TEST") |"
+            echo "| CLI smoke test | $(mark "$SMOKE") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for outcome in "$LOCK" "$FMT" "$CLIPPY" "$TEST" "$SMOKE"; do
+            [ "$outcome" = "success" ] || exit 1
+          done
 
   msrv:
-    name: Rust minimum supported version
+    name: Rust minimum supported version (1.91)
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -78,5 +134,6 @@ jobs:
         run: |
           rustup toolchain install "$RUST_MSRV" --profile minimal
           rustup override set "$RUST_MSRV"
+      # Not --locked: a stale lockfile is reported by the main job; this job only checks the compiler version.
       - name: Check
-        run: cargo check --workspace --locked
+        run: cargo check --workspace

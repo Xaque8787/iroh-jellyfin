@@ -50,8 +50,8 @@ fn serve_command(args: &RunArgs) -> Result<(), String> {
     let config = args.validate().map_err(|problems| problems.join("; "))?;
     let secret_key = prepare(&args.data)?;
     let _lock = DataDirLock::acquire(&config.data_dir).map_err(|error| error.to_string())?;
-    let state = HostState::open(&config.state_path(), config.policy)
-        .map_err(|error| error.to_string())?;
+    let state =
+        HostState::open(&config.state_path(), config.policy).map_err(|error| error.to_string())?;
     // Target filters match by prefix, so `iroh=warn` alone would also silence iroh_host and iroh_transport.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info")

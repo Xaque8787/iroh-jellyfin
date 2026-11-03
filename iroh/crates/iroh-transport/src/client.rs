@@ -131,9 +131,13 @@ impl ClientSession {
         let (send, recv) = &mut *control;
         let nonce: u64 = rand::random();
         let started = Instant::now();
-        write_frame(send, &Message::Ping(Ping { nonce }), MAX_CONTROL_FRAME_BYTES)
-            .await
-            .map_err(|error| ClientError::Connection(error.to_string()))?;
+        write_frame(
+            send,
+            &Message::Ping(Ping { nonce }),
+            MAX_CONTROL_FRAME_BYTES,
+        )
+        .await
+        .map_err(|error| ClientError::Connection(error.to_string()))?;
         let reply = timeout(HANDSHAKE_TIMEOUT, read_frame(recv, MAX_CONTROL_FRAME_BYTES))
             .await
             .map_err(|_| ClientError::Timeout)?

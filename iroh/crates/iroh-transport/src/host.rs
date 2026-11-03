@@ -111,7 +111,11 @@ async fn run_connection(
 ) {
     let remote = connection.remote_id().to_string();
     if connection.alpn() != ALPN {
-        close(&connection, close_code::PROTOCOL_VIOLATION, "unsupported alpn");
+        close(
+            &connection,
+            close_code::PROTOCOL_VIOLATION,
+            "unsupported alpn",
+        );
         return;
     }
     match handshake(&service, &connection, &remote).await {
@@ -121,7 +125,11 @@ async fn run_connection(
         Ok(None) => {}
         Err(problem) => {
             debug!(device = %remote, problem, "handshake failed");
-            close(&connection, close_code::PROTOCOL_VIOLATION, "handshake failed");
+            close(
+                &connection,
+                close_code::PROTOCOL_VIOLATION,
+                "handshake failed",
+            );
         }
     }
 }
@@ -171,7 +179,14 @@ async fn handshake(
         AuthDecision::Paired => AuthOutcome::Paired,
         AuthDecision::Denied { code, reason } => {
             info!(device = %remote, code, reason, "device denied");
-            deny(connection, &mut send, policy, code, close_code::NOT_AUTHORIZED).await;
+            deny(
+                connection,
+                &mut send,
+                policy,
+                code,
+                close_code::NOT_AUTHORIZED,
+            )
+            .await;
             return Ok(None);
         }
     };
@@ -188,12 +203,7 @@ async fn handshake(
 }
 
 async fn read_control(recv: &mut RecvStream) -> Result<Message, String> {
-    match timeout(
-        HANDSHAKE_TIMEOUT,
-        read_frame(recv, MAX_CONTROL_FRAME_BYTES),
-    )
-    .await
-    {
+    match timeout(HANDSHAKE_TIMEOUT, read_frame(recv, MAX_CONTROL_FRAME_BYTES)).await {
         Ok(Ok(message)) => Ok(message),
         Ok(Err(error)) => Err(error.to_string()),
         Err(_) => Err("handshake timed out".into()),
@@ -325,7 +335,12 @@ async fn handle_stream(
         }
     };
     let id = request.request_id.clone();
-    let log_path = request.path.split('?').next().unwrap_or_default().to_owned();
+    let log_path = request
+        .path
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
     if let Err(problem) = validate_http_request(&request) {
         reply_error(&mut send, &id, error_code::BAD_REQUEST, problem).await;
         return;

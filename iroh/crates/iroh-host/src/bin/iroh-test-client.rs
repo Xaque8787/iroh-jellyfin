@@ -34,7 +34,11 @@ const HOST_FILE: &str = "host.json";
 const KEY_FILE: &str = "client.key";
 
 #[derive(Debug, Parser)]
-#[command(name = "iroh-test-client", version, about = "Test client for jellyfin-iroh hosts")]
+#[command(
+    name = "iroh-test-client",
+    version,
+    about = "Test client for jellyfin-iroh hosts"
+)]
 struct Cli {
     #[command(flatten)]
     common: Common,
@@ -45,7 +49,12 @@ struct Cli {
 #[derive(Debug, Args)]
 struct Common {
     /// Directory holding this client's identity and the paired host's address.
-    #[arg(long, global = true, env = "IROH_CLIENT_DATA_DIR", default_value = "./iroh-client-data")]
+    #[arg(
+        long,
+        global = true,
+        env = "IROH_CLIENT_DATA_DIR",
+        default_value = "./iroh-client-data"
+    )]
     data_dir: PathBuf,
     /// Relay URL. Empty uses Iroh's default relays; `none` disables relays.
     #[arg(long, global = true, env = "IROH_RELAY_URL")]
@@ -140,10 +149,14 @@ async fn connect(common: &Common, endpoint: &Endpoint) -> Result<ClientSession, 
 
 async fn pair(common: &Common, endpoint: &Endpoint, link: &str) -> Result<(), String> {
     let invite = InviteLink::decode(link).map_err(|error| error.to_string())?;
-    let session =
-        ClientSession::connect(endpoint, invite.addr.clone(), &common.name, Some(&invite.token))
-            .await
-            .map_err(|error| error.to_string())?;
+    let session = ClientSession::connect(
+        endpoint,
+        invite.addr.clone(),
+        &common.name,
+        Some(&invite.token),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     let bytes = serde_json::to_vec_pretty(&invite.addr).map_err(|error| error.to_string())?;
     write_private_atomic(&common.data_dir.join(HOST_FILE), &bytes)
         .map_err(|error| error.to_string())?;
@@ -221,7 +234,10 @@ async fn fetch(
         None => tokio::io::copy(&mut response.body, &mut tokio::io::stdout()).await,
     }
     .map_err(|error| format!("body transfer failed: {error}"))?;
-    eprintln!("received {copied} bytes over {:?} path", session.path().kind);
+    eprintln!(
+        "received {copied} bytes over {:?} path",
+        session.path().kind
+    );
     session.close().await;
     Ok(())
 }
@@ -314,7 +330,12 @@ async fn forward(
     let body = Limited::new(request.into_body(), MAX_REQUEST_BODY_BYTES)
         .collect()
         .await
-        .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "request body is too large".into()))?
+        .map_err(|_| {
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request body is too large".into(),
+            )
+        })?
         .to_bytes();
     let body = (!body.is_empty()).then_some(body);
 

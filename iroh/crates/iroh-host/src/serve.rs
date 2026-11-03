@@ -97,7 +97,9 @@ async fn maintain(
         let reload_state = state.clone();
         match tokio::task::spawn_blocking(move || reload_state.reload()).await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!(%error, "could not reload host state; keeping the last good copy"),
+            Ok(Err(error)) => {
+                warn!(%error, "could not reload host state; keeping the last good copy")
+            }
             Err(_) => warn!("state reload task failed"),
         }
         let addr = endpoint.addr();

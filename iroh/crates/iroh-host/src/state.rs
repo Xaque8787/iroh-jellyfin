@@ -505,7 +505,13 @@ mod tests {
         host.create_invitation("Tablet", None, now).unwrap();
         admin.reload().unwrap();
         assert_eq!(admin.snapshot().invitations.len(), 3);
-        assert!(admin.snapshot().invitations.iter().any(|inv| inv.token_hash == pairing::hash_token(&second)));
+        assert!(
+            admin
+                .snapshot()
+                .invitations
+                .iter()
+                .any(|inv| inv.token_hash == pairing::hash_token(&second))
+        );
     }
 
     #[test]

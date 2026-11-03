@@ -230,7 +230,11 @@ async fn connect(
     ClientSession::connect(client, harness.host_addr.clone(), "test device", token).await
 }
 
-async fn read_all(session: &ClientSession, path: &str, range: Option<&str>) -> (u16, Vec<(String, String)>, Vec<u8>) {
+async fn read_all(
+    session: &ClientSession,
+    path: &str,
+    range: Option<&str>,
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let headers = range
         .map(|r| vec![("range".to_owned(), r.to_owned())])
         .unwrap_or_default();
@@ -253,8 +257,10 @@ async fn pairs_reconnects_and_serves_ranges() {
     let (status, headers, body) = read_all(&session, "/file", Some("bytes=100-199")).await;
     assert_eq!(status, 206);
     assert_eq!(body, file_bytes()[100..=199]);
-    assert!(headers.iter().any(|(name, value)| name == "content-range"
-        && value == &format!("bytes 100-199/{FILE_LEN}")));
+    assert!(
+        headers.iter().any(|(name, value)| name == "content-range"
+            && value == &format!("bytes 100-199/{FILE_LEN}"))
+    );
     assert!(session.ping().await.unwrap() < Duration::from_secs(5));
     session.close().await;
 
@@ -357,7 +363,10 @@ async fn policy_gate_follows_the_selected_path() {
         Err(ClientError::Request { code, .. }) => {
             assert_eq!(code, error_code::TRANSPORT_POLICY_DENIED)
         }
-        Ok(response) => panic!("relay_only served a direct request: {}", response.head.status),
+        Ok(response) => panic!(
+            "relay_only served a direct request: {}",
+            response.head.status
+        ),
         Err(other) => panic!("unexpected error: {other}"),
     }
 }

@@ -81,7 +81,8 @@ mod tests {
 
     fn sample() -> InviteLink {
         let id = SecretKey::generate().public();
-        let addr = EndpointAddr::new(id).with_ip_addr("192.0.2.10:4433".parse::<std::net::SocketAddr>().unwrap());
+        let addr = EndpointAddr::new(id)
+            .with_ip_addr("192.0.2.10:4433".parse::<std::net::SocketAddr>().unwrap());
         InviteLink::new(addr, crate::pairing::generate_token())
     }
 
@@ -91,10 +92,7 @@ mod tests {
         let encoded = link.encode();
         assert!(encoded.starts_with(LINK_PREFIX));
         assert_eq!(InviteLink::decode(&encoded).unwrap(), link);
-        assert_eq!(
-            InviteLink::decode(&format!("  {encoded}\n")).unwrap(),
-            link
-        );
+        assert_eq!(InviteLink::decode(&format!("  {encoded}\n")).unwrap(), link);
     }
 
     #[test]

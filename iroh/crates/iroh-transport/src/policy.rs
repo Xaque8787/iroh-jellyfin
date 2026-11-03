@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// The network path currently selected by Iroh for a connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PathKind {
     Direct,
     Relay,

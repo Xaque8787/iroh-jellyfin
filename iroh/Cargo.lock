@@ -1380,12 +1380,22 @@ dependencies = [
 name = "iroh-host"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "iroh",
  "iroh-transport",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

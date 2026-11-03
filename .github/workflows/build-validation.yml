@@ -69,6 +69,21 @@ jobs:
         continue-on-error: true
         run: cargo fmt --all --check
 
+      # Formatting is applied by CI because the authoring environment cannot run rustfmt.
+      - name: Upload formatting fix
+        if: steps.fmt.outcome == 'failure'
+        run: |
+          cargo fmt --all
+          git diff -- '*.rs' > "$RUNNER_TEMP/rustfmt.patch"
+          echo "::error::Formatting differs. Download the 'rustfmt-patch' artifact and apply it with: git apply rustfmt.patch"
+
+      - name: Upload rustfmt.patch
+        if: steps.fmt.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-patch
+          path: ${{ runner.temp }}/rustfmt.patch
+
       - name: Clippy
         id: clippy
         continue-on-error: true
@@ -98,6 +113,14 @@ jobs:
           fi
           test "$(stat -c %a "$RUNNER_TEMP/smoke/state.json")" = "600"
 
+      - name: End-to-end test (host and client, relays disabled)
+        id: e2e
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          cargo build ${{ steps.lock.outputs.flag }} -p iroh-host --bins
+          ../scripts/ci/e2e.sh target/debug
+
       - name: Summary
         if: always()
         env:
@@ -106,6 +129,7 @@ jobs:
           CLIPPY: ${{ steps.clippy.outcome }}
           TEST: ${{ steps.test.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
+          E2E: ${{ steps.e2e.outcome }}
         run: |
           mark() { [ "$1" = "success" ] && echo "pass" || echo "FAIL ($1)"; }
           {
@@ -117,8 +141,9 @@ jobs:
             echo "| Clippy (warnings are errors) | $(mark "$CLIPPY") |"
             echo "| Unit tests | $(mark "$TEST") |"
             echo "| CLI smoke test | $(mark "$SMOKE") |"
+            echo "| End-to-end pairing, Range, revoke | $(mark "$E2E") |"
           } >> "$GITHUB_STEP_SUMMARY"
-          for outcome in "$LOCK" "$FMT" "$CLIPPY" "$TEST" "$SMOKE"; do
+          for outcome in "$LOCK" "$FMT" "$CLIPPY" "$TEST" "$SMOKE" "$E2E"; do
             [ "$outcome" = "success" ] || exit 1
           done
 

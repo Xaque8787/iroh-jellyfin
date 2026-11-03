@@ -4,14 +4,15 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::{HeaderName, HeaderValue, Method, Request, Response, Uri};
-use http_body_util::Empty;
+use http_body_util::combinators::UnsyncBoxBody;
+use http_body_util::{BodyExt, Empty};
 use hyper::body::Incoming;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use tokio_util::sync::CancellationToken;
 
-use crate::protocol::{BodyMode, HttpRequest, error_code};
+use crate::protocol::{HttpRequest, error_code};
 
 pub const UPSTREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -28,7 +29,15 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
     "host",
 ];
 
-pub type UpstreamClient = Client<HttpConnector, Empty<Bytes>>;
+pub type BodyError = Box<dyn std::error::Error + Send + Sync>;
+pub type ProxyBody = UnsyncBoxBody<Bytes, BodyError>;
+pub type UpstreamClient = Client<HttpConnector, ProxyBody>;
+
+pub fn empty_body() -> ProxyBody {
+    Empty::<Bytes>::new()
+        .map_err(|never| match never {})
+        .boxed_unsync()
+}
 
 /// The local HTTP service that media requests are forwarded to. Plain HTTP on a trusted address only.
 #[derive(Debug, Clone)]
@@ -100,21 +109,16 @@ pub fn new_upstream_client() -> UpstreamClient {
     Client::builder(TokioExecutor::new()).build_http()
 }
 
-/// Sends the request to the origin and resolves once response headers arrive.
+/// Sends the request with `body` to the origin and resolves once response headers arrive.
 ///
 /// The returned body streams from the origin; dropping it closes the upstream connection.
 pub async fn forward(
     client: &UpstreamClient,
     origin: &Origin,
     request: &HttpRequest,
+    body: ProxyBody,
     cancel: &CancellationToken,
 ) -> Result<Response<Incoming>, ProxyError> {
-    if request.body != BodyMode::None {
-        return Err(ProxyError {
-            code: error_code::UNSUPPORTED,
-            message: "request bodies are not supported by this host".into(),
-        });
-    }
     let method = Method::from_bytes(request.method.as_bytes())
         .map_err(|_| ProxyError::bad_request("method is not valid"))?;
     let mut builder = Request::builder()
@@ -135,7 +139,7 @@ pub async fn forward(
         builder = builder.header(name, value);
     }
     let upstream_request = builder
-        .body(Empty::<Bytes>::new())
+        .body(body)
         .map_err(|_| ProxyError::bad_request("request could not be built"))?;
 
     let response = tokio::select! {
@@ -230,24 +234,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refuses_request_bodies() {
+    async fn reports_unreachable_origin() {
         let origin = Origin::parse("http://127.0.0.1:9").unwrap();
         let request = HttpRequest {
             request_id: "r1".into(),
-            method: "POST".into(),
+            method: "GET".into(),
             path: "/".into(),
             headers: vec![],
-            body: BodyMode::Stream,
+            body: crate::protocol::BodyMode::None,
             content_length: None,
         };
         let error = forward(
             &new_upstream_client(),
             &origin,
             &request,
+            empty_body(),
             &CancellationToken::new(),
         )
         .await
         .unwrap_err();
-        assert_eq!(error.code, error_code::UNSUPPORTED);
+        assert_eq!(error.code, error_code::UPSTREAM_UNAVAILABLE);
     }
 }

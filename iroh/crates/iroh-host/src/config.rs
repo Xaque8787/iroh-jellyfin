@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use iroh::RelayUrl;
+use iroh_transport::net::RelayChoice;
 use iroh_transport::policy::TransportPolicy;
 use iroh_transport::proxy::Origin;
 
@@ -27,6 +28,37 @@ pub enum Command {
     Identity(DataArgs),
     /// Check configuration, data directory, identity, state, and origin reachability.
     Doctor(RunArgs),
+    /// Run the host: accept paired devices and forward their requests to the origin.
+    Serve(RunArgs),
+    /// Create a one-time invitation link for a new device.
+    Invite(InviteArgs),
+    /// List paired devices.
+    Devices(DataArgs),
+    /// Revoke a paired device. Its open sessions end within a few seconds.
+    Revoke(RevokeArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct InviteArgs {
+    #[command(flatten)]
+    pub data: DataArgs,
+    /// Name shown in the device list, for example "Living room TV".
+    #[arg(long, default_value = "New device")]
+    pub label: String,
+    /// How long the link stays valid, in seconds (60 to 86400).
+    #[arg(long)]
+    pub ttl_secs: Option<u64>,
+    /// Relay to put in the link when the running host's address is not known. Same values as serve.
+    #[arg(long, env = "IROH_RELAY_URL")]
+    pub relay_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RevokeArgs {
+    #[command(flatten)]
+    pub data: DataArgs,
+    /// Endpoint id of the device, as shown by `devices`.
+    pub endpoint_id: String,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -46,9 +78,21 @@ pub struct RunArgs {
     /// auto, relay_only, or p2p_only. When omitted, the policy stored in state.json is used.
     #[arg(long, env = "IROH_TRANSPORT_POLICY")]
     pub policy: Option<String>,
-    /// Iroh relay to use. When omitted, Iroh's default public relays are used.
+    /// Iroh relay URL. Empty uses Iroh's default public relays; `none` disables relays entirely.
     #[arg(long, env = "IROH_RELAY_URL")]
     pub relay_url: Option<String>,
+}
+
+/// Parses the IROH_RELAY_URL convention shared by the host and the test client.
+pub fn parse_relay(value: Option<&str>) -> Result<RelayChoice, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(RelayChoice::Default),
+        Some("none") => Ok(RelayChoice::Disabled),
+        Some(url) => url
+            .parse::<RelayUrl>()
+            .map(RelayChoice::Custom)
+            .map_err(|error| format!("IROH_RELAY_URL: {error}")),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +100,7 @@ pub struct HostConfig {
     pub data_dir: PathBuf,
     pub origin: Origin,
     pub policy: Option<TransportPolicy>,
-    pub relay_url: Option<RelayUrl>,
+    pub relay: RelayChoice,
 }
 
 impl HostConfig {
@@ -84,26 +128,15 @@ impl RunArgs {
                 None
             }
         };
-        let relay_url = match self
-            .relay_url
-            .as_deref()
-            .filter(|url| !url.trim().is_empty())
-        {
-            None => None,
-            Some(url) => match url.parse::<RelayUrl>() {
-                Ok(url) => Some(url),
-                Err(error) => {
-                    problems.push(format!("IROH_RELAY_URL: {error}"));
-                    None
-                }
-            },
-        };
+        let relay = parse_relay(self.relay_url.as_deref())
+            .map_err(|error| problems.push(error))
+            .unwrap_or(RelayChoice::Default);
         match origin {
             Some(origin) if problems.is_empty() => Ok(HostConfig {
                 data_dir: self.data.data_dir.clone(),
                 origin,
                 policy,
-                relay_url,
+                relay,
             }),
             _ => Err(problems),
         }
@@ -135,7 +168,7 @@ mod tests {
         .validate()
         .unwrap();
         assert_eq!(config.policy, Some(TransportPolicy::P2pOnly));
-        assert!(config.relay_url.is_some());
+        assert!(matches!(config.relay, RelayChoice::Custom(_)));
         assert!(config.state_path().ends_with("state.json"));
     }
 
@@ -144,8 +177,14 @@ mod tests {
         let config = args("http://127.0.0.1:8096", None, Some(""))
             .validate()
             .unwrap();
-        assert!(config.relay_url.is_none());
+        assert_eq!(config.relay, RelayChoice::Default);
         assert!(config.policy.is_none());
+    }
+
+    #[test]
+    fn none_disables_relays() {
+        assert_eq!(parse_relay(Some(" none ")), Ok(RelayChoice::Disabled));
+        assert_eq!(parse_relay(None), Ok(RelayChoice::Default));
     }
 
     #[test]

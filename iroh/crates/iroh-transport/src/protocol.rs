@@ -19,7 +19,10 @@ pub const MAX_HEADER_COUNT: usize = 128;
 pub const MAX_REQUEST_ID_BYTES: usize = 128;
 pub const MAX_PATH_BYTES: usize = 8 * 1024;
 
-/// Chunk size used when pumping bodies between Iroh streams and HTTP.
+/// Largest request body the host forwards. Media playback sends small JSON bodies only.
+pub const MAX_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
+
+/// Largest chunk read from an Iroh stream at once when relaying bodies.
 pub const BODY_CHUNK_BYTES: usize = 64 * 1024;
 
 pub mod error_code {
@@ -31,6 +34,7 @@ pub mod error_code {
     pub const TRANSPORT_POLICY_DENIED: &str = "transport_policy_denied";
     pub const BAD_REQUEST: &str = "bad_request";
     pub const UNSUPPORTED: &str = "unsupported";
+    pub const PAYLOAD_TOO_LARGE: &str = "payload_too_large";
     pub const UPSTREAM_UNAVAILABLE: &str = "upstream_unavailable";
     pub const UPSTREAM_TIMEOUT: &str = "upstream_timeout";
     pub const REVOKED: &str = "revoked";
@@ -46,6 +50,8 @@ pub mod close_code {
     pub const TRANSPORT_POLICY: u32 = 4;
     pub const SHUTTING_DOWN: u32 = 5;
     pub const IDLE_TIMEOUT: u32 = 6;
+    /// Stream reset only: the origin failed while the response body was being sent.
+    pub const UPSTREAM_FAILED: u32 = 7;
 }
 
 pub type Header = (String, String);
@@ -169,6 +175,15 @@ pub fn validate_http_request(request: &HttpRequest) -> Result<(), &'static str> 
     if request.headers.len() > MAX_HEADER_COUNT {
         return Err("too many headers");
     }
+    match (request.body, request.content_length) {
+        (BodyMode::None, Some(length)) if length > 0 => {
+            return Err("content_length requires body stream");
+        }
+        (BodyMode::Stream, Some(length)) if length > MAX_REQUEST_BODY_BYTES as u64 => {
+            return Err("request body is too large");
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -277,5 +292,16 @@ mod tests {
         let mut bad = request("/");
         bad.headers = vec![("x".into(), "y".into()); MAX_HEADER_COUNT + 1];
         assert!(validate_http_request(&bad).is_err());
+    }
+
+    #[test]
+    fn checks_declared_body_lengths() {
+        let mut req = request("/Users/AuthenticateByName");
+        req.content_length = Some(10);
+        assert!(validate_http_request(&req).is_err());
+        req.body = BodyMode::Stream;
+        assert!(validate_http_request(&req).is_ok());
+        req.content_length = Some(MAX_REQUEST_BODY_BYTES as u64 + 1);
+        assert!(validate_http_request(&req).is_err());
     }
 }

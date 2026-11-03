@@ -1,6 +1,6 @@
 # Transport Protocol v1 (client to host)
 
-Status: draft, implemented in `iroh/crates/iroh-transport`. Message shapes are locked by the wire-format tests in `protocol.rs`. The session logic that uses them comes in Milestone 2.
+Status: draft, implemented in `iroh/crates/iroh-transport`. Message shapes are locked by the wire-format tests in `protocol.rs`. Host session logic is in `host.rs`, and the reference client in `client.rs`.
 
 ## Connection
 
@@ -44,7 +44,17 @@ The host replies with:
 - `paired`: the token redeemed a valid invitation, and the endpoint id is now authorized.
 - `denied`: `reason` holds one of the error codes below. The host then closes the connection with close code 2.
 
-The client keeps the control stream open for the session's lifetime.
+The client keeps the control stream open for the session's lifetime. It may send `{"type":"PING","nonce":7}` at any time, and the host answers `{"type":"PONG","nonce":7}`. That gives an application-level round-trip time. Iroh's own per-path RTT is reported separately. If the client finishes the control stream, the host closes the connection with code 0.
+
+The handshake must complete within 10 seconds. Every 2 seconds the host re-checks that the device is still authorized. A revoked device's connection is closed with code 3, including any transfers in progress.
+
+## Invitation links
+
+```
+jellyfin-iroh://invite/<base64url without padding of {"v":1,"addr":<iroh EndpointAddr>,"token":"<pairing token>"}>
+```
+
+`addr` is the host's full Iroh address: endpoint id, relay URL, and direct IP addresses as last published by the running host. A client can therefore dial without any lookup service. Links are capped at 8 KiB. A `v` other than 1 is rejected. The token works once and expires (default 1 hour, 60 seconds to 24 hours).
 
 ## Requests
 
@@ -57,7 +67,8 @@ One HTTP exchange per additional bidirectional stream. Streams are independent, 
 
 - `path` must be origin-form: it starts with a single `/`, has no spaces or control characters, and has no scheme or authority. The host always sends it to its configured origin, never to another host.
 - `method` is an uppercase HTTP token.
-- `body`: v1 hosts accept only `none` and reject `stream` with `unsupported`.
+- `body`: `none`, or `stream`. With `stream`, the raw request body follows the frame on the same stream, and the client's `finish` marks its end. Request bodies are capped at 32 MiB, and a larger body fails with `payload_too_large`. `content_length`, when present, must match the body and must be absent or 0 with `none`.
+- The HTTP_REQUEST frame must arrive within 10 seconds of the stream opening, or the host resets the stream with code 1.
 - Hop-by-hop headers (`connection`, `keep-alive`, `te`, `trailer`, `transfer-encoding`, `upgrade`, `proxy-*`, `host`) are dropped.
 
 Success:
@@ -74,11 +85,15 @@ Failure before headers:
 {"type":"STREAM_ERROR","request_id":"a1b2","code":"upstream_unavailable","message":"..."}
 ```
 
-Cancellation: either side may reset or stop the stream. The host then drops the upstream request.
+Failure after headers: the host resets the stream with code 7 when the origin fails mid-body, or code 5 when it is shutting down. The client must treat the body as truncated.
+
+Cancellation: the client may stop or reset the stream at any time, for example when the user seeks. The host notices immediately, drops the upstream request, and closes that origin connection. A seek is just a new stream with a new `Range`.
+
+Transport policy: before forwarding, the host checks the connection's selected path against the policy. Under `p2p_only`, it waits up to 5 seconds for Iroh to select a direct path before refusing with `transport_policy_denied`. See `docs/transport-policies.md` for exactly what this does and does not guarantee.
 
 ## Error codes
 
-`protocol_version_unsupported`, `protocol_violation`, `not_authorized`, `pairing_token_invalid`, `pairing_rate_limited`, `transport_policy_denied`, `bad_request`, `unsupported`, `upstream_unavailable`, `upstream_timeout`, `revoked`, `shutting_down`.
+`protocol_version_unsupported`, `protocol_violation`, `not_authorized`, `pairing_token_invalid`, `pairing_rate_limited`, `transport_policy_denied`, `bad_request`, `unsupported`, `payload_too_large`, `upstream_unavailable`, `upstream_timeout`, `revoked`, `shutting_down`.
 
 ## Close and reset codes
 
@@ -91,6 +106,7 @@ Cancellation: either side may reset or stop the stream. The host then drops the 
 | 4 | Transport policy |
 | 5 | Host shutting down |
 | 6 | Idle timeout |
+| 7 | Origin failed mid-body (stream reset only) |
 
 ## Versioning
 

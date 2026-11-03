@@ -1,8 +1,10 @@
 //! Authorized devices, invitations, and policy, persisted as one JSON file in the data directory.
 //!
 //! Every mutation is written to disk (atomically, 0600) before it becomes visible in memory.
+//! Mutations hold an exclusive lock on `state.lock` and start from the file on disk, so the running
+//! host and admin commands (invite, revoke) can change state at the same time without losing writes.
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -17,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::fsutil::{restrict_permissions, write_private_atomic};
 
 pub const STATE_FILE: &str = "state.json";
+const STATE_LOCK_FILE: &str = "state.lock";
 pub const STATE_VERSION: u32 = 1;
 pub const MIN_INVITATION_TTL_SECS: u64 = 60;
 pub const MAX_INVITATION_TTL_SECS: u64 = 24 * 60 * 60;
@@ -99,25 +102,8 @@ impl HostState {
         path: &Path,
         configured_policy: Option<TransportPolicy>,
     ) -> Result<Self, StateError> {
-        let mut file = match fs::read(path) {
-            Ok(bytes) => {
-                restrict_permissions(path).map_err(|source| io_error(path, source))?;
-                let file: StateFile =
-                    serde_json::from_slice(&bytes).map_err(|source| StateError::Corrupt {
-                        path: path.to_path_buf(),
-                        source,
-                    })?;
-                if file.version > STATE_VERSION {
-                    return Err(StateError::UnsupportedVersion {
-                        path: path.to_path_buf(),
-                        found: file.version,
-                    });
-                }
-                file
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => StateFile::default(),
-            Err(source) => return Err(io_error(path, source)),
-        };
+        let _lock = lock_state(path)?;
+        let mut file = load(path)?;
         if let Some(policy) = configured_policy {
             file.policy = policy;
         }
@@ -127,6 +113,13 @@ impl HostState {
             path: path.to_path_buf(),
             inner: Mutex::new(file),
         })
+    }
+
+    /// Picks up changes made by other processes. Readers never see a partial file.
+    pub fn reload(&self) -> Result<(), StateError> {
+        let file = load(&self.path)?;
+        *self.lock() = file;
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
@@ -189,6 +182,7 @@ impl HostState {
         token: Option<&str>,
         now: u64,
     ) -> Result<Result<PairOutcome, RedeemError>, StateError> {
+        self.reload()?;
         if self.is_authorized(endpoint_id) {
             return Ok(Ok(PairOutcome::AlreadyAuthorized));
         }
@@ -234,10 +228,12 @@ impl HostState {
         })
     }
 
-    /// Applies `change` to a copy, persists it, then publishes it. On write failure nothing changes.
+    /// Applies `change` to the current file, persists it, then publishes it. On write failure nothing
+    /// changes.
     fn update<T>(&self, change: impl FnOnce(&mut StateFile) -> T) -> Result<T, StateError> {
+        let _file_lock = lock_state(&self.path)?;
         let mut guard = self.lock();
-        let mut next = guard.clone();
+        let mut next = load(&self.path)?;
         let result = change(&mut next);
         prune_invitations(&mut next, now_secs());
         persist(&self.path, &next)?;
@@ -278,6 +274,41 @@ fn sanitize_device_name(name: &str) -> String {
     } else {
         cleaned.to_owned()
     }
+}
+
+fn load(path: &Path) -> Result<StateFile, StateError> {
+    match fs::read(path) {
+        Ok(bytes) => {
+            restrict_permissions(path).map_err(|source| io_error(path, source))?;
+            let file: StateFile =
+                serde_json::from_slice(&bytes).map_err(|source| StateError::Corrupt {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            if file.version > STATE_VERSION {
+                return Err(StateError::UnsupportedVersion {
+                    path: path.to_path_buf(),
+                    found: file.version,
+                });
+            }
+            Ok(file)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(StateFile::default()),
+        Err(source) => Err(io_error(path, source)),
+    }
+}
+
+/// Blocks until this process holds the state write lock. Released when the file is dropped.
+fn lock_state(state_path: &Path) -> Result<File, StateError> {
+    let lock_path = state_path.with_file_name(STATE_LOCK_FILE);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|source| io_error(&lock_path, source))?;
+    file.lock().map_err(|source| io_error(&lock_path, source))?;
+    Ok(file)
 }
 
 fn persist(path: &Path, file: &StateFile) -> Result<(), StateError> {
@@ -453,6 +484,28 @@ mod tests {
             HostState::open(&path, None),
             Err(StateError::UnsupportedVersion { found: 99, .. })
         ));
+    }
+
+    #[test]
+    fn separate_handles_see_each_others_changes() {
+        let dir = TempDir::create();
+        let now = now_secs();
+        let host = open(&dir);
+        let admin = open(&dir);
+        let (_, token) = admin.create_invitation("TV", None, now).unwrap();
+        assert_eq!(
+            host.pair("endpoint-a", "TV", Some(&token), now).unwrap(),
+            Ok(PairOutcome::Paired)
+        );
+        assert!(admin.revoke_device("endpoint-a", now).unwrap());
+        assert!(host.is_authorized("endpoint-a"));
+        host.reload().unwrap();
+        assert!(!host.is_authorized("endpoint-a"));
+        let (_, second) = admin.create_invitation("Phone", None, now).unwrap();
+        host.create_invitation("Tablet", None, now).unwrap();
+        admin.reload().unwrap();
+        assert_eq!(admin.snapshot().invitations.len(), 3);
+        assert!(admin.snapshot().invitations.iter().any(|inv| inv.token_hash == pairing::hash_token(&second)));
     }
 
     #[test]

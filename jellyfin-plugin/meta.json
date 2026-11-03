@@ -1,0 +1,17 @@
+{
+  "category": "Network",
+  "changelog": "Milestone 3: control API v1 admin page.",
+  "description": "Manage private peer-to-peer remote access through a separately running iroh-host: status, sessions, devices, invitations and transport policy.",
+  "guid": "49e88783-5cfb-4ccc-9692-3e454a57f1eb",
+  "name": "Iroh Remote Access",
+  "overview": "Private remote access over Iroh",
+  "owner": "jellyfin-iroh",
+  "targetAbi": "12.4.0.0",
+  "timestamp": "2026-11-03T00:00:00.0000000Z",
+  "version": "0.3.0.0",
+  "status": "Active",
+  "autoUpdate": false,
+  "assemblies": [
+    "Jellyfin.Plugin.Iroh.dll"
+  ]
+}

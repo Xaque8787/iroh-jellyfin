@@ -72,6 +72,37 @@ for _ in $(seq 1 50); do
 done
 test "$(curl -s -o "$work/curl.bin" -w '%{http_code}' -r 1000000-1065535 http://127.0.0.1:18097/movie.bin)" = "206"
 cmp "$work/expected.bin" "$work/curl.bin"
+
+# Control API v1. The proxy keeps its session open, so it must be listed with a direct path.
+api=http://127.0.0.1:47950/v1
+test "$(stat -c %a "$work/host/control.token")" = "600"
+auth=(-H "Authorization: Bearer $(cat "$work/host/control.token")")
+json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1], {'d': d}))" "$1"; }
+test "$(curl -sf "$api/health" | json 'd["control_api"]')" = "1"
+test "$(curl -s -o /dev/null -w '%{http_code}' "$api/status")" = "401"
+curl -sf "${auth[@]}" "$api/status" > "$work/status.json"
+test "$(json 'd["relay"]["mode"]' < "$work/status.json")" = "disabled"
+test "$(json 'd["devices"]' < "$work/status.json")" = "1"
+curl -sf "${auth[@]}" "$api/sessions" > "$work/sessions.json"
+cat "$work/sessions.json"
+test "$(json 'd["sessions"][0]["name"]' < "$work/sessions.json")" = "ci-client"
+test "$(json 'd["sessions"][0]["path"]["kind"]' < "$work/sessions.json")" = "direct"
+test "$(curl -sf "${auth[@]}" "$api/devices" | json 'd["devices"][0]["connected"]')" = "True"
+
+policy() { curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X PUT -H 'Content-Type: application/json' -d "{\"policy\":\"$1\"}" "$api/policy"; }
+test "$(policy p2p_only)" = "200"
+test "$(policy relay_only)" = "409"
+test "$(policy auto)" = "200"
+
+# An invitation made through the API pairs a second device, which the API then revokes.
+curl -sf "${auth[@]}" -X POST -H 'Content-Type: application/json' -d '{"label":"API phone","ttl_secs":600}' "$api/invitations" > "$work/invite.json"
+phone=("$bin/iroh-test-client" --data-dir "$work/phone" --name api-phone)
+"${phone[@]}" pair "$(json 'd["link"]' < "$work/invite.json")"
+test "$(curl -sf "${auth[@]}" "$api/invitations" | json 'len(d["invitations"])')" = "0"
+phone_id=$(curl -sf "${auth[@]}" "$api/devices" | json '[x for x in d["devices"] if x["name"] == "api-phone"][0]["endpoint_id"]')
+test "$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X DELETE "$api/devices/$phone_id")" = "204"
+test "$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X DELETE "$api/devices/$phone_id")" = "404"
+
 kill -INT "$proxy_pid"
 wait "$proxy_pid" || true
 
@@ -84,6 +115,9 @@ test -n "$device"
 sleep 3
 if "${client[@]}" fetch /movie.bin --output "$work/denied.bin"; then
   echo "revoked device was still served" && exit 1
+fi
+if "${phone[@]}" fetch /movie.bin --output "$work/denied.bin"; then
+  echo "device revoked through the control API was still served" && exit 1
 fi
 
 kill -TERM "$host_pid"

@@ -228,6 +228,16 @@ impl HostState {
         })
     }
 
+    /// Cancels an unredeemed invitation. Returns false when none has that id.
+    pub fn cancel_invitation(&self, id: &str) -> Result<bool, StateError> {
+        self.update(|file| {
+            let before = file.invitations.len();
+            file.invitations
+                .retain(|invitation| invitation.id != id || invitation.is_redeemed());
+            file.invitations.len() != before
+        })
+    }
+
     /// Applies `change` to the current file, persists it, then publishes it. On write failure nothing
     /// changes.
     fn update<T>(&self, change: impl FnOnce(&mut StateFile) -> T) -> Result<T, StateError> {
@@ -351,6 +361,22 @@ mod tests {
         assert_eq!(
             state.pair("endpoint-a", "TV", None, now).unwrap(),
             Ok(PairOutcome::AlreadyAuthorized)
+        );
+    }
+
+    #[test]
+    fn cancelled_invitations_cannot_be_redeemed() {
+        let dir = TempDir::create();
+        let now = now_secs();
+        let state = open(&dir);
+        let (invitation, token) = state.create_invitation("Phone", None, now).unwrap();
+        assert!(state.cancel_invitation(&invitation.id).unwrap());
+        assert!(!state.cancel_invitation(&invitation.id).unwrap());
+        assert_eq!(
+            state
+                .pair("endpoint-a", "Phone", Some(&token), now)
+                .unwrap(),
+            Err(RedeemError::Invalid)
         );
     }
 

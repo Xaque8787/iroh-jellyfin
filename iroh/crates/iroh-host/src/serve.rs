@@ -12,7 +12,8 @@ use iroh_transport::protocol::ALPN;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::config::HostConfig;
+use crate::config::{ControlConfig, HostConfig};
+use crate::control::{ControlContext, TOKEN_FILE, load_or_create_token, serve_control};
 use crate::fsutil::write_private_atomic;
 use crate::registry::StateRegistry;
 use crate::state::HostState;
@@ -62,11 +63,53 @@ pub async fn run(
         config.data_dir.join(ADDR_FILE),
         shutdown.clone(),
     ));
+    let service = HostService::new(
+        config.origin.clone(),
+        Arc::new(StateRegistry::new(state.clone())),
+    );
+    if let Some(control) = &config.control {
+        let context = ControlContext::new(
+            state,
+            service.sessions(),
+            Box::new({
+                let endpoint = endpoint.clone();
+                move || endpoint.addr()
+            }),
+            config.origin.display(),
+            config.relay.clone(),
+            policy == TransportPolicy::RelayOnly,
+            &load_or_create_token(&config.data_dir, control.token.as_deref())?,
+        );
+        start_control(control, &config.data_dir, context, shutdown.clone()).await?;
+    }
     tokio::spawn(stop_on_signal(shutdown.clone()));
 
-    let service = HostService::new(config.origin.clone(), Arc::new(StateRegistry::new(state)));
     serve(endpoint, service, shutdown).await;
     info!("host stopped");
+    Ok(())
+}
+
+async fn start_control(
+    control: &ControlConfig,
+    data_dir: &Path,
+    context: ControlContext,
+    shutdown: CancellationToken,
+) -> Result<(), String> {
+    let listener = tokio::net::TcpListener::bind(control.listen)
+        .await
+        .map_err(|error| {
+            format!(
+                "could not listen for the control API on {}: {error}",
+                control.listen
+            )
+        })?;
+    let token_source = if control.token.is_some() {
+        "IROH_CONTROL_TOKEN".to_owned()
+    } else {
+        data_dir.join(TOKEN_FILE).display().to_string()
+    };
+    info!(listen = %control.listen, token = %token_source, "control API v1 listening");
+    tokio::spawn(serve_control(listener, Arc::new(context), shutdown));
     Ok(())
 }
 

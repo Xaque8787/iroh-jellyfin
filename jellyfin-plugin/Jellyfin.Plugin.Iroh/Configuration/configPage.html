@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Iroh Remote Access</title>
+</head>
+<body>
+    <div id="IrohConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select">
+        <style>
+            #IrohConfigPage .iroh-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(13em, 1fr)); gap: 1em; margin: 1em 0 2em; }
+            #IrohConfigPage .iroh-card { padding: 1em; border-radius: 0.5em; background: rgba(127, 127, 127, 0.12); transition: background 0.2s ease; }
+            #IrohConfigPage .iroh-card:hover { background: rgba(127, 127, 127, 0.18); }
+            #IrohConfigPage .iroh-card-label { font-size: 0.85em; opacity: 0.75; margin-bottom: 0.4em; }
+            #IrohConfigPage .iroh-card-value { font-size: 1.15em; font-weight: 600; word-break: break-all; line-height: 1.3; }
+            #IrohConfigPage .iroh-notice { padding: 0.8em 1em; border-radius: 0.5em; margin: 1em 0; line-height: 1.5; }
+            #IrohConfigPage .iroh-notice-warn { background: rgba(230, 160, 20, 0.18); border-left: 4px solid #e6a014; }
+            #IrohConfigPage .iroh-notice-error { background: rgba(220, 60, 50, 0.18); border-left: 4px solid #dc3c32; }
+            #IrohConfigPage .iroh-table { width: 100%; border-collapse: collapse; margin-top: 0.5em; }
+            #IrohConfigPage .iroh-table th, #IrohConfigPage .iroh-table td { text-align: left; padding: 0.6em 0.5em; border-bottom: 1px solid rgba(127, 127, 127, 0.25); vertical-align: middle; }
+            #IrohConfigPage .iroh-table th { font-weight: 600; font-size: 0.85em; opacity: 0.8; }
+            #IrohConfigPage .iroh-table tr { transition: background 0.15s ease; }
+            #IrohConfigPage .iroh-table tbody tr:hover { background: rgba(127, 127, 127, 0.1); }
+            #IrohConfigPage .iroh-mono { font-family: monospace; font-size: 0.9em; }
+            #IrohConfigPage .iroh-pill { display: inline-block; padding: 0.15em 0.6em; border-radius: 1em; font-size: 0.85em; font-weight: 600; }
+            #IrohConfigPage .iroh-pill-direct { background: rgba(40, 170, 90, 0.25); }
+            #IrohConfigPage .iroh-pill-relay { background: rgba(40, 120, 220, 0.25); }
+            #IrohConfigPage .iroh-pill-unknown, #IrohConfigPage .iroh-pill-revoked { background: rgba(127, 127, 127, 0.25); }
+            #IrohConfigPage .iroh-pill-active { background: rgba(40, 170, 90, 0.25); }
+            #IrohConfigPage .iroh-empty { opacity: 0.7; padding: 0.8em 0; }
+            #IrohConfigPage .iroh-row { display: flex; flex-wrap: wrap; gap: 1em; align-items: flex-end; }
+            #IrohConfigPage .iroh-row > .inputContainer, #IrohConfigPage .iroh-row > .selectContainer { flex: 1 1 14em; margin-bottom: 0; }
+            #IrohConfigPage textarea.iroh-link { width: 100%; box-sizing: border-box; min-height: 5em; font-family: monospace; font-size: 0.85em; padding: 0.6em; border-radius: 0.3em; resize: vertical; }
+            #IrohConfigPage .iroh-section { margin-bottom: 2.5em; }
+            #IrohConfigPage .iroh-hidden { display: none; }
+            #IrohConfigPage .iroh-scroll { overflow-x: auto; }
+        </style>
+        <div data-role="content">
+            <div class="content-primary">
+                <h2 class="sectionTitle">Iroh Remote Access</h2>
+                <p>Private remote access to this server over Iroh peer-to-peer connections. Settings here are applied by iroh-host, which runs separately from Jellyfin.</p>
+
+                <div id="irohError" class="iroh-notice iroh-notice-error iroh-hidden" role="alert"></div>
+                <div id="irohRestart" class="iroh-notice iroh-notice-warn iroh-hidden">
+                    The saved policy needs an iroh-host restart before it takes effect. In Docker, restart the container.
+                </div>
+
+                <div class="iroh-grid">
+                    <div class="iroh-card"><div class="iroh-card-label">Policy</div><div class="iroh-card-value" id="irohPolicyValue">-</div></div>
+                    <div class="iroh-card"><div class="iroh-card-label">Relay</div><div class="iroh-card-value" id="irohRelayValue">-</div></div>
+                    <div class="iroh-card"><div class="iroh-card-label">Connected now</div><div class="iroh-card-value" id="irohSessionsValue">-</div></div>
+                    <div class="iroh-card"><div class="iroh-card-label">Paired devices</div><div class="iroh-card-value" id="irohDevicesValue">-</div></div>
+                    <div class="iroh-card"><div class="iroh-card-label">Host uptime</div><div class="iroh-card-value" id="irohUptimeValue">-</div></div>
+                </div>
+
+                <div class="iroh-section">
+                    <h3 class="sectionTitle">Invite a device</h3>
+                    <form id="irohInviteForm">
+                        <div class="iroh-row">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="irohInviteLabel">Label</label>
+                                <input id="irohInviteLabel" type="text" is="emby-input" maxlength="64" required placeholder="Living room TV" />
+                            </div>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="irohInviteTtl">Valid for</label>
+                                <select id="irohInviteTtl" is="emby-select" class="emby-select-withcolor emby-select">
+                                    <option value="900">15 minutes</option>
+                                    <option value="3600">1 hour</option>
+                                    <option value="86400">24 hours</option>
+                                </select>
+                            </div>
+                            <div>
+                                <button is="emby-button" type="submit" class="raised button-submit emby-button"><span>Create link</span></button>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="irohInviteResult" class="iroh-hidden">
+                        <p>Open this link on the device you are pairing. It works once and expires <span id="irohInviteExpiry"></span>.</p>
+                        <textarea id="irohInviteLink" class="iroh-link emby-input" readonly></textarea>
+                        <button is="emby-button" type="button" id="irohCopyLink" class="raised emby-button"><span>Copy link</span></button>
+                    </div>
+                    <div class="iroh-scroll">
+                        <table class="iroh-table" id="irohInvitationsTable">
+                            <thead><tr><th>Label</th><th>Expires</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="iroh-empty iroh-hidden" id="irohInvitationsEmpty">No pending invitations.</div>
+                </div>
+
+                <div class="iroh-section">
+                    <h3 class="sectionTitle">Connected sessions</h3>
+                    <div class="iroh-scroll">
+                        <table class="iroh-table" id="irohSessionsTable">
+                            <thead><tr><th>Device</th><th>Path</th><th>Round trip</th><th>Remote address</th><th>Requests</th><th>Sent</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="iroh-empty iroh-hidden" id="irohSessionsEmpty">No devices are connected.</div>
+                </div>
+
+                <div class="iroh-section">
+                    <h3 class="sectionTitle">Paired devices</h3>
+                    <div class="iroh-scroll">
+                        <table class="iroh-table" id="irohDevicesTable">
+                            <thead><tr><th>Name</th><th>Endpoint</th><th>Paired</th><th>State</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="iroh-empty iroh-hidden" id="irohDevicesEmpty">No devices have been paired yet.</div>
+                </div>
+
+                <div class="iroh-section">
+                    <h3 class="sectionTitle">Transport policy</h3>
+                    <form id="irohPolicyForm">
+                        <div class="iroh-row">
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="irohPolicy">Policy</label>
+                                <select id="irohPolicy" is="emby-select" class="emby-select-withcolor emby-select">
+                                    <option value="auto">Auto: direct when possible, relay fallback</option>
+                                    <option value="relay_only">Relay only</option>
+                                    <option value="p2p_only">P2P only</option>
+                                </select>
+                            </div>
+                            <div>
+                                <button is="emby-button" type="submit" class="raised button-submit emby-button"><span>Save policy</span></button>
+                            </div>
+                        </div>
+                    </form>
+                    <div class="fieldDescription" id="irohEnforcement"></div>
+                    <div class="fieldDescription">Relay only and P2P only are best effort in this version. See docs/transport-policies.md for what is and is not guaranteed.</div>
+                </div>
+
+                <div class="iroh-section">
+                    <h3 class="sectionTitle">Host connection</h3>
+                    <form id="irohSettingsForm">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="irohControlUrl">Control API URL</label>
+                            <input id="irohControlUrl" type="url" is="emby-input" />
+                            <div class="fieldDescription">Ignored when JELLYFIN_IROH_CONTROL_URL is set, as it is in the Docker image.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="irohTokenFile">Token file</label>
+                            <input id="irohTokenFile" type="text" is="emby-input" />
+                            <div class="fieldDescription">Ignored when JELLYFIN_IROH_CONTROL_TOKEN or JELLYFIN_IROH_CONTROL_TOKEN_FILE is set.</div>
+                        </div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span>Save</span></button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                var pluginId = '49e88783-5cfb-4ccc-9692-3e454a57f1eb';
+                var page = document.querySelector('#IrohConfigPage');
+                var refreshTimer = null;
+
+                function $(selector) { return page.querySelector(selector); }
+
+                function show(element, visible) { element.classList.toggle('iroh-hidden', !visible); }
+
+                function showError(message) {
+                    var box = $('#irohError');
+                    box.textContent = message || '';
+                    show(box, !!message);
+                }
+
+                function request(method, path, body) {
+                    var headers = { 'Authorization': 'MediaBrowser Token="' + ApiClient.accessToken() + '"' };
+                    if (body !== undefined) { headers['Content-Type'] = 'application/json'; }
+                    return fetch(ApiClient.getUrl('JellyfinIroh/' + path), {
+                        method: method,
+                        headers: headers,
+                        body: body === undefined ? undefined : JSON.stringify(body)
+                    }).then(function (response) {
+                        if (response.status === 204) { return null; }
+                        return response.text().then(function (text) {
+                            var data = null;
+                            try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+                            if (!response.ok) {
+                                var message = data && data.error && data.error.message ? data.error.message : 'Request failed with status ' + response.status + '.';
+                                throw new Error(message);
+                            }
+                            return data;
+                        });
+                    });
+                }
+
+                function cell(row, text, className) {
+                    var td = document.createElement('td');
+                    td.textContent = text;
+                    if (className) { td.className = className; }
+                    row.appendChild(td);
+                    return td;
+                }
+
+                function pill(row, text, kind) {
+                    var td = document.createElement('td');
+                    var span = document.createElement('span');
+                    span.className = 'iroh-pill iroh-pill-' + kind;
+                    span.textContent = text;
+                    td.appendChild(span);
+                    row.appendChild(td);
+                }
+
+                function actionButton(row, label, onClick) {
+                    var td = document.createElement('td');
+                    var button = document.createElement('button');
+                    button.setAttribute('is', 'emby-button');
+                    button.type = 'button';
+                    button.className = 'emby-button';
+                    button.textContent = label;
+                    button.addEventListener('click', onClick);
+                    td.appendChild(button);
+                    row.appendChild(td);
+                }
+
+                function fillTable(tableSelector, emptySelector, items, buildRow) {
+                    var body = $(tableSelector + ' tbody');
+                    body.replaceChildren();
+                    items.forEach(function (item) {
+                        var row = document.createElement('tr');
+                        buildRow(row, item);
+                        body.appendChild(row);
+                    });
+                    show($(tableSelector), items.length > 0);
+                    show($(emptySelector), items.length === 0);
+                }
+
+                function when(secs) { return secs ? new Date(secs * 1000).toLocaleString() : '-'; }
+
+                function shortId(id) { return id.length > 16 ? id.slice(0, 8) + '...' + id.slice(-6) : id; }
+
+                function bytes(n) {
+                    var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+                    var i = 0;
+                    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+                    return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
+                }
+
+                function duration(secs) {
+                    var d = Math.floor(secs / 86400), h = Math.floor(secs % 86400 / 3600), m = Math.floor(secs % 3600 / 60);
+                    return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m + 'm' : m + 'm';
+                }
+
+                function renderPolicy(policy) {
+                    $('#irohPolicyValue').textContent = policy.configured;
+                    $('#irohPolicy').value = policy.configured;
+                    $('#irohEnforcement').textContent = 'Current enforcement: ' + policy.enforcement + '.';
+                    show($('#irohRestart'), policy.restart_required);
+                }
+
+                function loadStatus() {
+                    return request('GET', 'Status').then(function (status) {
+                        renderPolicy(status.policy);
+                        var relay = status.relay.mode === 'disabled' ? 'Disabled' : (status.relay_connected ? 'Connected' : 'Not connected');
+                        if (status.relay.mode === 'custom') { relay += ' (custom)'; }
+                        $('#irohRelayValue').textContent = relay;
+                        $('#irohSessionsValue').textContent = String(status.sessions);
+                        $('#irohDevicesValue').textContent = String(status.devices);
+                        $('#irohUptimeValue').textContent = duration(status.uptime_secs);
+                    });
+                }
+
+                function loadSessions() {
+                    return request('GET', 'Sessions').then(function (data) {
+                        fillTable('#irohSessionsTable', '#irohSessionsEmpty', data.sessions, function (row, s) {
+                            cell(row, s.name);
+                            pill(row, s.path.kind, s.path.kind);
+                            cell(row, s.path.rtt_ms === null || s.path.rtt_ms === undefined ? '-' : s.path.rtt_ms.toFixed(1) + ' ms');
+                            cell(row, s.path.remote_addr || '-', 'iroh-mono');
+                            cell(row, s.requests + (s.active_requests ? ' (' + s.active_requests + ' active)' : ''));
+                            cell(row, bytes(s.bytes_sent));
+                        });
+                        $('#irohSessionsValue').textContent = String(data.sessions.length);
+                    });
+                }
+
+                function loadDevices() {
+                    return request('GET', 'Devices').then(function (data) {
+                        fillTable('#irohDevicesTable', '#irohDevicesEmpty', data.devices, function (row, d) {
+                            cell(row, d.name);
+                            cell(row, shortId(d.endpoint_id), 'iroh-mono').title = d.endpoint_id;
+                            cell(row, when(d.paired_at));
+                            if (d.revoked_at) {
+                                pill(row, 'revoked', 'revoked');
+                                cell(row, '');
+                            } else {
+                                pill(row, d.connected ? 'connected' : 'active', 'active');
+                                actionButton(row, 'Revoke', function () {
+                                    if (!window.confirm('Revoke "' + d.name + '"? It will be disconnected and must be invited again to reconnect.')) { return; }
+                                    request('DELETE', 'Devices/' + encodeURIComponent(d.endpoint_id)).then(refreshAll).catch(fail);
+                                });
+                            }
+                        });
+                    });
+                }
+
+                function loadInvitations() {
+                    return request('GET', 'Invitations').then(function (data) {
+                        fillTable('#irohInvitationsTable', '#irohInvitationsEmpty', data.invitations, function (row, inv) {
+                            cell(row, inv.label);
+                            cell(row, when(inv.expires_at));
+                            actionButton(row, 'Cancel', function () {
+                                request('DELETE', 'Invitations/' + encodeURIComponent(inv.id)).then(function () {
+                                    show($('#irohInviteResult'), false);
+                                    return loadInvitations();
+                                }).catch(fail);
+                            });
+                        });
+                    });
+                }
+
+                function fail(error) { showError(error && error.message ? error.message : String(error)); }
+
+                function refreshAll() {
+                    return Promise.all([loadStatus(), loadSessions(), loadDevices(), loadInvitations()])
+                        .then(function () { showError(null); })
+                        .catch(fail);
+                }
+
+                page.addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        $('#irohControlUrl').value = config.ControlUrl || '';
+                        $('#irohTokenFile').value = config.TokenFile || '';
+                    });
+                    refreshAll().then(function () { Dashboard.hideLoadingMsg(); });
+                    clearInterval(refreshTimer);
+                    refreshTimer = setInterval(function () {
+                        Promise.all([loadStatus(), loadSessions()]).catch(fail);
+                    }, 5000);
+                });
+
+                page.addEventListener('pagehide', function () {
+                    clearInterval(refreshTimer);
+                    refreshTimer = null;
+                });
+
+                $('#irohInviteForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    var label = $('#irohInviteLabel').value.trim();
+                    request('POST', 'Invitations', { label: label, ttl_secs: parseInt($('#irohInviteTtl').value, 10) })
+                        .then(function (inv) {
+                            $('#irohInviteLink').value = inv.link;
+                            $('#irohInviteExpiry').textContent = when(inv.expires_at);
+                            show($('#irohInviteResult'), true);
+                            $('#irohInviteLabel').value = '';
+                            showError(null);
+                            return loadInvitations();
+                        })
+                        .catch(fail);
+                    return false;
+                });
+
+                $('#irohCopyLink').addEventListener('click', function () {
+                    var link = $('#irohInviteLink');
+                    var done = function () { Dashboard.alert('Invitation link copied.'); };
+                    if (navigator.clipboard && window.isSecureContext) {
+                        navigator.clipboard.writeText(link.value).then(done).catch(fail);
+                    } else {
+                        link.select();
+                        document.execCommand('copy');
+                        done();
+                    }
+                });
+
+                $('#irohPolicyForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    request('PUT', 'Policy', { policy: $('#irohPolicy').value })
+                        .then(function (policy) { renderPolicy(policy); showError(null); })
+                        .catch(fail);
+                    return false;
+                });
+
+                $('#irohSettingsForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        config.ControlUrl = $('#irohControlUrl').value.trim();
+                        config.TokenFile = $('#irohTokenFile').value.trim();
+                        return ApiClient.updatePluginConfiguration(pluginId, config);
+                    }).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                        return refreshAll();
+                    });
+                    return false;
+                });
+            })();
+        </script>
+    </div>
+</body>
+</html>

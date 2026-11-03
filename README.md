@@ -9,8 +9,8 @@ The core is a standalone Rust host, `iroh-host`. It knows nothing about Jellyfin
 | Milestone | Scope | State |
 |---|---|---|
 | 1. Foundation | Transport protocol v1 messages and framing, policies, pairing primitives, HTTP forwarding primitives, host identity and state storage, `identity` and `doctor` commands, build validation CI | Compiled and tested by CI |
-| 2. Rust host | Iroh endpoint, pairing over invite links, sessions, HTTP-over-Iroh streaming with Range and cancellation, revocation, policy gate, test client, end-to-end CI test | Code written, waiting for its first CI run |
-| 3. Control API, plugin, Docker | Versioned control socket, Jellyfin plugin, Docker image, Compose | Not started |
+| 2. Rust host | Iroh endpoint, pairing over invite links, sessions, HTTP-over-Iroh streaming with Range and cancellation, revocation, policy gate, test client, end-to-end CI test | Compiled and tested by CI |
+| 3. Control API, plugin, Docker | Control API v1 (`protocol/control-v1.md`), live session diagnostics, Jellyfin admin plugin, Docker image with process supervision and automatic plugin install, Compose, CI for plugin and image | Code written, waiting for its first CI run |
 | Later | Cross-platform workflow, diagnostics, docs, Android TV fork spec | Not started |
 
 ## Repository layout
@@ -18,12 +18,37 @@ The core is a standalone Rust host, `iroh-host`. It knows nothing about Jellyfin
 ```
 iroh/                     Rust workspace (pinned toolchain, committed Cargo.lock)
   crates/iroh-transport   Reusable protocol, framing, policies, pairing, HTTP forwarding
-  crates/iroh-host        Host executable (identity, device registry, commands) and iroh-test-client
-protocol/                 Versioned protocol specifications
+  crates/iroh-host        Host executable (identity, device registry, control API, commands) and iroh-test-client
+jellyfin-plugin/          Jellyfin admin plugin (C#) and its tests
+docker/                   Container entrypoint (plugin install, supervision)
+Dockerfile, compose.yaml  Image built from local sources
+protocol/                 Versioned protocol specifications (transport-v1, control-v1)
 docs/                     Policies, versions, design notes
-scripts/ci/               End-to-end test and a Range-capable test origin
+scripts/ci/               End-to-end tests, Docker smoke test, Range-capable test origin
 .github/workflows/        Build validation
 ```
+
+## Running with Docker (Jellyfin + iroh-host)
+
+Requires only Docker with Compose. Everything is compiled inside the build from this repository's sources.
+
+```bash
+git clone <repository>
+cd jellyfin-iroh
+docker compose up -d --build
+docker compose logs -f        # wait for Jellyfin and "control API v1 listening"
+```
+
+Open http://localhost:8096, finish Jellyfin's setup wizard, then go to Dashboard > Plugins > Iroh Remote Access. From there you can create invitation links, see connected devices with their path (direct or relay) and round-trip time, revoke devices, and change the transport policy.
+
+How the image works:
+
+- At every start, the entrypoint copies the bundled plugin into `./config/plugins/JellyfinIroh_<version>/` (replacing older versions of this plugin only), then launches Jellyfin.
+- `iroh-host` runs as a separate process under the entrypoint's supervisor, which restarts it with backoff if it exits. Jellyfin does not start or stop it.
+- The plugin talks to `iroh-host` only through control API v1 on `127.0.0.1:47950` inside the container. That port is not published. The token is read from `./iroh-data/control.token`.
+- Folders next to `compose.yaml`: `./config`, `./cache`, `./media` (mounted read-only at `/media`; add it as a library), `./iroh-data`.
+
+To pair a test device from another machine, use `iroh-test-client pair '<link>'` and `iroh-test-client proxy`, as described below.
 
 ## Building the host without Docker
 
@@ -69,12 +94,18 @@ Configuration (flags or environment):
 | `IROH_RELAY_URL` | Iroh default relays | Custom relay URL, or `none` to disable relays (LAN or testing only) |
 | `RUST_LOG` | `info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info` | Log filter for `serve` |
 | `IROH_CLIENT_DATA_DIR` | `./iroh-client-data` | Test client identity and paired host |
+| `IROH_CONTROL_LISTEN` | `127.0.0.1:47950` | Control API address, or `off` |
+| `IROH_CONTROL_ALLOW_REMOTE` | unset | Required to listen on a non-loopback address |
+| `IROH_CONTROL_TOKEN` | generated `control.token` | Fixed control token (32+ characters) instead of the file |
+
+The plugin reads `JELLYFIN_IROH_CONTROL_URL`, `JELLYFIN_IROH_CONTROL_TOKEN_FILE` and `JELLYFIN_IROH_CONTROL_TOKEN`; these override the plugin's saved settings. The Docker image sets the first two.
 
 ## Security notes
 
 - The data directory holds the host's private key (`identity.key`). It is created with owner-only permissions on Unix. Back it up: if it is lost, every device must pair again.
 - Invitation tokens are stored only as SHA-256 digests. They are single use and expire. Failed attempts are rate limited, and the limit is saved across restarts.
 - `relay_only` and `p2p_only` are **best-effort**, not guaranteed. See `docs/transport-policies.md`.
+- The control API token grants full control of pairing. It lives in `control.token` (owner-only) and never reaches the browser: the dashboard page calls the plugin, which requires a Jellyfin administrator and forwards a fixed set of operations.
 
 ## License
 

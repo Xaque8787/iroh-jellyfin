@@ -1,0 +1,27 @@
+# Jellyfin + iroh-host, built from this repository: docker compose up -d --build
+# Data lives next to this file: ./config (Jellyfin), ./cache, ./media (your library, read-only),
+# ./iroh-data (Iroh identity, paired devices, control token). Back up ./config and ./iroh-data.
+name: jellyfin-iroh
+
+services:
+  jellyfin:
+    build: .
+    image: jellyfin-iroh:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    # Host networking avoids Docker's extra NAT layer and can improve direct P2P rates on Linux.
+    # If you enable it, remove "ports" above.
+    # network_mode: host
+    environment:
+      # auto | relay_only | p2p_only. When set, overrides the policy saved from the dashboard.
+      # IROH_TRANSPORT_POLICY: auto
+      # A custom relay URL, or "none" to disable relays (direct connections only).
+      # IROH_RELAY_URL: https://relay.example.com
+      RUST_LOG: info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info
+    volumes:
+      - ./config:/config
+      - ./cache:/cache
+      - ./media:/media:ro
+      - ./iroh-data:/iroh-data

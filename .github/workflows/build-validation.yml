@@ -162,3 +162,51 @@ jobs:
       # Not --locked: a stale lockfile is reported by the main job; this job only checks the compiler version.
       - name: Check
         run: cargo check --workspace
+
+  plugin:
+    name: Jellyfin plugin (build, test)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: jellyfin-plugin
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: jellyfin-plugin/global.json
+      - name: Build
+        run: dotnet build Jellyfin.Plugin.Iroh/Jellyfin.Plugin.Iroh.csproj -c Release
+      - name: Tests
+        run: dotnet test Jellyfin.Plugin.Iroh.Tests/Jellyfin.Plugin.Iroh.Tests.csproj -c Release
+      - name: Dashboard page script parses
+        run: |
+          python3 - <<'EOF' > "$RUNNER_TEMP/configPage.js"
+          import re
+          html = open("Jellyfin.Plugin.Iroh/Configuration/configPage.html", encoding="utf-8").read()
+          scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+          assert len(scripts) == 1, scripts
+          print(scripts[0])
+          EOF
+          node --check "$RUNNER_TEMP/configPage.js"
+
+  docker:
+    name: Docker image (build, smoke)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: jellyfin-iroh:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        timeout-minutes: 10
+        run: bash scripts/ci/docker-smoke.sh jellyfin-iroh:ci

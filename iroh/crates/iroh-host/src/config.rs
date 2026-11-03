@@ -1,5 +1,6 @@
 //! Command line and environment configuration. Every flag has an `IROH_*` environment equivalent.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
@@ -81,6 +82,33 @@ pub struct RunArgs {
     /// Iroh relay URL. Empty uses Iroh's default public relays; `none` disables relays entirely.
     #[arg(long, env = "IROH_RELAY_URL")]
     pub relay_url: Option<String>,
+    /// Control API listen address (see protocol/control-v1.md), or `off`.
+    #[arg(long, env = "IROH_CONTROL_LISTEN", default_value = DEFAULT_CONTROL_LISTEN)]
+    pub control_listen: String,
+    /// Allow the control API to listen on a non-loopback address.
+    #[arg(long, env = "IROH_CONTROL_ALLOW_REMOTE")]
+    pub control_allow_remote: bool,
+    /// Control API token. When unset, the token in <data-dir>/control.token is used or created.
+    #[arg(long, env = "IROH_CONTROL_TOKEN", hide_env_values = true)]
+    pub control_token: Option<String>,
+}
+
+pub const DEFAULT_CONTROL_LISTEN: &str = "127.0.0.1:47950";
+const MIN_CONTROL_TOKEN_CHARS: usize = 32;
+
+#[derive(Clone)]
+pub struct ControlConfig {
+    pub listen: SocketAddr,
+    pub token: Option<String>,
+}
+
+impl std::fmt::Debug for ControlConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlConfig")
+            .field("listen", &self.listen)
+            .field("token", &self.token.as_ref().map(|_| "<set>"))
+            .finish()
+    }
 }
 
 /// Parses the IROH_RELAY_URL convention shared by the host and the test client.
@@ -101,6 +129,7 @@ pub struct HostConfig {
     pub origin: Origin,
     pub policy: Option<TransportPolicy>,
     pub relay: RelayChoice,
+    pub control: Option<ControlConfig>,
 }
 
 impl HostConfig {
@@ -131,15 +160,46 @@ impl RunArgs {
         let relay = parse_relay(self.relay_url.as_deref())
             .map_err(|error| problems.push(error))
             .unwrap_or(RelayChoice::Default);
+        let control = self
+            .control_config()
+            .map_err(|error| problems.push(error))
+            .ok()
+            .flatten();
         match origin {
             Some(origin) if problems.is_empty() => Ok(HostConfig {
                 data_dir: self.data.data_dir.clone(),
                 origin,
                 policy,
                 relay,
+                control,
             }),
             _ => Err(problems),
         }
+    }
+
+    fn control_config(&self) -> Result<Option<ControlConfig>, String> {
+        let listen = self.control_listen.trim();
+        if listen.eq_ignore_ascii_case("off") {
+            return Ok(None);
+        }
+        let listen: SocketAddr = listen.parse().map_err(|_| {
+            format!("IROH_CONTROL_LISTEN: '{listen}' is not an ip:port address or 'off'")
+        })?;
+        if !listen.ip().is_loopback() && !self.control_allow_remote {
+            return Err(format!(
+                "IROH_CONTROL_LISTEN: {listen} is not a loopback address; set IROH_CONTROL_ALLOW_REMOTE=true to allow it"
+            ));
+        }
+        let token = match self.control_token.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(token) if token.chars().count() < MIN_CONTROL_TOKEN_CHARS => {
+                return Err(format!(
+                    "IROH_CONTROL_TOKEN must be at least {MIN_CONTROL_TOKEN_CHARS} characters"
+                ));
+            }
+            Some(token) => Some(token.to_owned()),
+        };
+        Ok(Some(ControlConfig { listen, token }))
     }
 }
 
@@ -155,7 +215,34 @@ mod tests {
             origin: origin.into(),
             policy: policy.map(Into::into),
             relay_url: relay.map(Into::into),
+            control_listen: DEFAULT_CONTROL_LISTEN.into(),
+            control_allow_remote: false,
+            control_token: None,
         }
+    }
+
+    #[test]
+    fn control_api_is_loopback_only_unless_allowed() {
+        let mut run = args("http://127.0.0.1:8096", None, None);
+        let control = run.validate().unwrap().control.unwrap();
+        assert_eq!(control.listen.to_string(), DEFAULT_CONTROL_LISTEN);
+        run.control_listen = "0.0.0.0:47950".into();
+        assert!(run.validate().is_err());
+        run.control_allow_remote = true;
+        assert!(run.validate().is_ok());
+        run.control_listen = "OFF".into();
+        assert!(run.validate().unwrap().control.is_none());
+    }
+
+    #[test]
+    fn short_control_tokens_are_rejected() {
+        let mut run = args("http://127.0.0.1:8096", None, None);
+        run.control_token = Some("too-short".into());
+        assert!(run.validate().is_err());
+        run.control_token = Some("x".repeat(32));
+        let control = run.validate().unwrap().control.unwrap();
+        assert_eq!(control.token.as_deref(), Some("x".repeat(32).as_str()));
+        assert!(!format!("{control:?}").contains("xxxx"));
     }
 
     #[test]

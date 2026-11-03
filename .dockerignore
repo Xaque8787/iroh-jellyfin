@@ -1,0 +1,12 @@
+.git
+.github
+.v3
+.env
+iroh/target
+jellyfin-plugin/**/bin
+jellyfin-plugin/**/obj
+config
+cache
+media
+iroh-data
+iroh-client-data

@@ -221,6 +221,22 @@ fn doctor(args: &RunArgs) -> ExitCode {
             "disabled; devices must reach this host on a direct address",
         ),
     }
+    match &config.control {
+        Some(control) if control.listen.ip().is_loopback() => {
+            report.ok("control API", format!("v1 on {}", control.listen))
+        }
+        Some(control) => report.warn(
+            "control API",
+            format!(
+                "v1 on {} is reachable from other machines; protect it with a firewall",
+                control.listen
+            ),
+        ),
+        None => report.warn(
+            "control API",
+            "disabled; the plugin cannot manage this host",
+        ),
+    }
 
     if report.failed {
         ExitCode::FAILURE

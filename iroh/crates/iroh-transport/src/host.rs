@@ -26,6 +26,7 @@ use crate::protocol::{
     PROTOCOL_VERSION, StreamError, close_code, error_code, validate_http_request,
 };
 use crate::proxy::{self, Origin, ProxyBody, UpstreamClient};
+use crate::sessions::{SessionGuard, SessionStats, SessionTable};
 
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const REQUEST_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -65,6 +66,7 @@ pub struct HostService {
     origin: Origin,
     client: UpstreamClient,
     registry: Arc<dyn DeviceRegistry>,
+    sessions: Arc<SessionTable>,
 }
 
 impl HostService {
@@ -73,7 +75,13 @@ impl HostService {
             origin,
             client: proxy::new_upstream_client(),
             registry,
+            sessions: Arc::default(),
         })
+    }
+
+    /// Sessions currently admitted, for status reporting.
+    pub fn sessions(&self) -> Arc<SessionTable> {
+        self.sessions.clone()
     }
 }
 
@@ -119,8 +127,9 @@ async fn run_connection(
         return;
     }
     match handshake(&service, &connection, &remote).await {
-        Ok(Some((send, recv))) => {
-            serve_session(service, connection, remote, send, recv, shutdown).await;
+        Ok(Some((send, recv, name))) => {
+            let guard = Arc::new(service.sessions.register(&remote, &name, &connection));
+            serve_session(service, connection, remote, guard, send, recv, shutdown).await;
         }
         Ok(None) => {}
         Err(problem) => {
@@ -134,12 +143,13 @@ async fn run_connection(
     }
 }
 
-/// Runs HELLO / AUTH_REQUEST / AUTH_RESULT. Returns the control stream when the device is admitted.
+/// Runs HELLO / AUTH_REQUEST / AUTH_RESULT. Returns the control stream and the device's name when
+/// the device is admitted.
 async fn handshake(
     service: &HostService,
     connection: &Connection,
     remote: &str,
-) -> Result<Option<(SendStream, RecvStream)>, String> {
+) -> Result<Option<(SendStream, RecvStream, String)>, String> {
     let (mut send, mut recv) = timeout(HANDSHAKE_TIMEOUT, connection.accept_bi())
         .await
         .map_err(|_| "no control stream opened".to_owned())?
@@ -199,7 +209,7 @@ async fn handshake(
         .await
         .map_err(|error| error.to_string())?;
     info!(device = %remote, name = %hello.name, ?outcome, "device connected");
-    Ok(Some((send, recv)))
+    Ok(Some((send, recv, hello.name)))
 }
 
 async fn read_control(recv: &mut RecvStream) -> Result<Message, String> {
@@ -237,6 +247,7 @@ async fn serve_session(
     service: Arc<HostService>,
     connection: Connection,
     remote: String,
+    guard: Arc<SessionGuard>,
     control_send: SendStream,
     control_recv: RecvStream,
     shutdown: CancellationToken,
@@ -273,7 +284,7 @@ async fn serve_session(
             }
             stream = connection.accept_bi() => match stream {
                 Ok((send, recv)) => {
-                    requests.spawn(handle_stream(service.clone(), connection.clone(), send, recv, session.clone()));
+                    requests.spawn(handle_stream(service.clone(), connection.clone(), guard.clone(), send, recv, session.clone()));
                 }
                 Err(error) => {
                     debug!(device = %remote, %error, "connection ended");
@@ -317,10 +328,13 @@ enum BodyOutcome {
 async fn handle_stream(
     service: Arc<HostService>,
     connection: Connection,
+    guard: Arc<SessionGuard>,
     mut send: SendStream,
     mut recv: RecvStream,
     session: CancellationToken,
 ) {
+    let stats = guard.stats();
+    let _active = stats.begin_request();
     let started = Instant::now();
     let request = match timeout(
         REQUEST_HEADER_TIMEOUT,
@@ -409,7 +423,7 @@ async fn handle_stream(
 
     let outcome = tokio::select! {
         _ = cancel.cancelled() => None,
-        outcome = pump_body(&mut send, response.into_body()) => Some(outcome),
+        outcome = pump_body(&mut send, response.into_body(), stats) => Some(outcome),
     };
     let elapsed_ms = started.elapsed().as_millis() as u64;
     match outcome {
@@ -455,7 +469,7 @@ async fn admitted_path(
 }
 
 /// Streams the response body, stopping early if the client stops reading or resets the stream.
-async fn pump_body(send: &mut SendStream, mut body: Incoming) -> BodyOutcome {
+async fn pump_body(send: &mut SendStream, mut body: Incoming, stats: &SessionStats) -> BodyOutcome {
     let mut sent = 0u64;
     loop {
         let frame = tokio::select! {
@@ -476,6 +490,7 @@ async fn pump_body(send: &mut SendStream, mut body: Incoming) -> BodyOutcome {
                 return BodyOutcome::ClientGone(sent);
             }
             sent += length;
+            stats.add_bytes(length);
         }
     }
 }

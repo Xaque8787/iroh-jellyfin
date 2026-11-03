@@ -92,7 +92,7 @@ jobs:
       - name: Tests
         id: test
         continue-on-error: true
-        run: cargo test --workspace ${{ steps.lock.outputs.flag }}
+        run: cargo test --workspace --no-fail-fast ${{ steps.lock.outputs.flag }}
 
       - name: CLI smoke test
         id: smoke
@@ -119,7 +119,7 @@ jobs:
         timeout-minutes: 5
         run: |
           cargo build ${{ steps.lock.outputs.flag }} -p iroh-host --bins
-          ../scripts/ci/e2e.sh target/debug
+          bash ../scripts/ci/e2e.sh target/debug
 
       - name: Summary
         if: always()

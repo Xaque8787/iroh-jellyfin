@@ -190,7 +190,8 @@ mod tests {
 
     #[test]
     fn limits_repeated_failures_then_recovers_after_window() {
-        let mut invitations = vec![invitation("abc", 0)];
+        let ttl = FAILURE_WINDOW_SECS * 2;
+        let mut invitations = vec![Invitation::new("inv-1".into(), "TV".into(), "abc", 0, ttl)];
         let mut limiter = FailureLimiter::default();
         for attempt in 0..MAX_FAILURES_PER_WINDOW as u64 {
             assert_eq!(

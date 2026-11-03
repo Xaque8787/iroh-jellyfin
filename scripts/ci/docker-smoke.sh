@@ -23,11 +23,14 @@ docker run -d --name "$name" --init -p 127.0.0.1:18096:8096 \
 
 in_container() { docker exec "$name" bash -c "$1"; }
 
+# /health answers 200 "Degraded" while Jellyfin is still migrating; only "Healthy" means ready.
+health() { curl -fs --max-time 5 http://127.0.0.1:18096/health || true; }
 for _ in $(seq 1 90); do
-  curl -fs http://127.0.0.1:18096/health > /dev/null && break
+  [ "$(health)" = Healthy ] && break
   sleep 2
 done
-curl -fs http://127.0.0.1:18096/health
+test "$(health)" = Healthy
+echo "jellyfin healthy"
 
 # The plugin was copied into the persistent plugin directory and Jellyfin loaded it.
 ls "$work/config/plugins/"
@@ -38,7 +41,14 @@ for _ in $(seq 1 30); do
 done
 docker logs "$name" 2>&1 | grep -E 'Loaded plugin.*Iroh Remote Access'
 # The plugin's admin routes exist and require a signed-in administrator (404 would mean not loaded).
-test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18096/JellyfinIroh/Status)" = "401"
+route_status() { curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18096/JellyfinIroh/Status; }
+for _ in $(seq 1 15); do
+  [ "$(route_status)" = 401 ] && break
+  sleep 2
+done
+code=$(route_status)
+echo "unauthenticated /JellyfinIroh/Status -> $code"
+test "$code" = 401
 
 # iroh-host runs with its control API on loopback inside the container.
 for _ in $(seq 1 30); do
@@ -65,7 +75,7 @@ done
 in_container 'curl -fs -H "Authorization: Bearer $(cat /iroh-data/control.token)" http://127.0.0.1:47950/v1/status' > "$work/status2.json"
 python3 -c "import json,sys; a,b=(json.load(open(p)) for p in sys.argv[1:]); assert a['endpoint_id']==b['endpoint_id'] and b['uptime_secs']<=a['uptime_secs']+5, (a,b); print('restarted ok')" "$work/status.json" "$work/status2.json"
 docker logs "$name" 2>&1 | grep -q "iroh-host exited"
-curl -fs http://127.0.0.1:18096/health
+test "$(health)" = Healthy
 
 started=$(date +%s)
 docker stop -t 30 "$name"

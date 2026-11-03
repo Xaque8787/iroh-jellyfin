@@ -16,13 +16,10 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0.403@sha256:de4fe90a98845d75910b9769662465
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 WORKDIR /src/jellyfin-plugin
 COPY jellyfin-plugin/ ./
+COPY docker/package-plugin.sh /usr/local/bin/package-plugin
 RUN --mount=type=cache,target=/root/.nuget/packages \
     dotnet publish Jellyfin.Plugin.Iroh/Jellyfin.Plugin.Iroh.csproj -c Release -o /build \
-    && version=$(sed -n 's/^ *"version": *"\([0-9.]*\)".*/\1/p\' meta.json) \
-    && test -n "$version\" \
-    && dir="/out/JellyfinIroh_${version}\" \
-    && install -D -m 0644 /build/Jellyfin.Plugin.Iroh.dll "$dir/Jellyfin.Plugin.Iroh.dll\" \
-    && install -m 0644 meta.json "$dir/meta.json"
+    && sh /usr/local/bin/package-plugin /build meta.json /out
 
 FROM jellyfin/jellyfin:12.4.20261026-211555@sha256:fea863d0cd9ec445985d9c75fc6ed64e38a1d2766cf0c250a33d553f4fc1b771
 COPY --from=rust-build /out/iroh-host /usr/local/bin/iroh-host

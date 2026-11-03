@@ -67,7 +67,7 @@ Configuration (flags or environment):
 | `IROH_ORIGIN` | `http://127.0.0.1:8096` | Local HTTP service to expose |
 | `IROH_TRANSPORT_POLICY` | stored value, else `auto` | `auto`, `relay_only`, `p2p_only` |
 | `IROH_RELAY_URL` | Iroh default relays | Custom relay URL, or `none` to disable relays (LAN or testing only) |
-| `RUST_LOG` | `info,iroh=warn,noq=warn` | Log filter for `serve` |
+| `RUST_LOG` | `info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info` | Log filter for `serve` |
 | `IROH_CLIENT_DATA_DIR` | `./iroh-client-data` | Test client identity and paired host |
 
 ## Security notes

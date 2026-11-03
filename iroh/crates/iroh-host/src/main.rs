@@ -52,8 +52,10 @@ fn serve_command(args: &RunArgs) -> Result<(), String> {
     let _lock = DataDirLock::acquire(&config.data_dir).map_err(|error| error.to_string())?;
     let state = HostState::open(&config.state_path(), config.policy)
         .map_err(|error| error.to_string())?;
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,iroh=warn,noq=warn"));
+    // Target filters match by prefix, so `iroh=warn` alone would also silence iroh_host and iroh_transport.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info")
+    });
     tracing_subscriber::fmt().with_env_filter(filter).init();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

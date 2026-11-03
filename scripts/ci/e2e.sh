@@ -9,7 +9,7 @@ bin=$(cd "$1" && pwd)
 work=$(mktemp -d)
 host_log="$work/host.log"
 export IROH_RELAY_URL=none
-export RUST_LOG=info,iroh=warn,noq=warn
+export RUST_LOG=info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info
 pids=()
 cleanup() {
   for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done

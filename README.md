@@ -50,6 +50,19 @@ How the image works:
 
 To pair a test device from another machine, use `iroh-test-client pair '<link>'` and `iroh-test-client proxy`, as described below.
 
+## Prebuilt binaries
+
+Run the **Binaries** workflow from the Actions tab (Run workflow). Each run uploads a tarball per platform containing `iroh-host` and `iroh-test-client`, with a `.sha256` checksum:
+
+| Artifact | Runs on |
+|---|---|
+| `jellyfin-iroh-x86_64-unknown-linux-musl` | Any 64-bit x86 Linux (static, no glibc requirement) |
+| `jellyfin-iroh-aarch64-unknown-linux-musl` | Any 64-bit ARM Linux, for example a Raspberry Pi 4/5 |
+| `jellyfin-iroh-android-arm64-v8a` | 64-bit Android 7+ (`adb shell` or Termux) |
+| `jellyfin-iroh-android-armeabi-v7a` | 32-bit Android 7+, common on Android TV devices |
+
+The Linux builds pass the same end-to-end test as CI before upload. The Android builds are compiled but not run in CI. The test client is for development and testing only.
+
 ## Building the host without Docker
 
 Requires Rust (the pinned toolchain installs automatically through `rustup`).

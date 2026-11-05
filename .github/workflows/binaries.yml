@@ -1,0 +1,124 @@
+name: Binaries
+
+# Manually triggered builds of iroh-host and iroh-test-client for download.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.99.1"
+  # getifaddrs, used for network interface discovery, needs API 24.
+  ANDROID_API: "24"
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: iroh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
+          rustup override set "$RUST_TOOLCHAIN"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            iroh/target
+          key: bin-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('iroh/Cargo.lock') }}
+          restore-keys: bin-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-
+
+      # Static musl binaries run on any Linux distribution regardless of its glibc version.
+      - name: Build
+        env:
+          CC: musl-gcc
+        run: cargo build --release --locked --target ${{ matrix.target }} -p iroh-host --bins
+
+      - name: Binaries are static and run
+        run: |
+          set -eux
+          dir=target/${{ matrix.target }}/release
+          for b in iroh-host iroh-test-client; do
+            file "$dir/$b" | grep -Eq 'statically linked|static-pie linked'
+            "$dir/$b" --version
+          done
+
+      - name: End-to-end test with the release binaries
+        timeout-minutes: 5
+        run: bash ../scripts/ci/e2e.sh target/${{ matrix.target }}/release
+
+      - name: Package
+        run: bash ../scripts/ci/package-binaries.sh target/${{ matrix.target }}/release ${{ matrix.target }} "$RUNNER_TEMP/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-iroh-${{ matrix.target }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+  android:
+    name: Android ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+          # Many Android TV devices run a 32-bit userland even on 64-bit chips.
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+    defaults:
+      run:
+        working-directory: iroh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
+          rustup override set "$RUST_TOOLCHAIN"
+          cargo install cargo-ndk --locked
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            iroh/target
+          key: bin-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('iroh/Cargo.lock') }}
+          restore-keys: bin-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Build
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t ${{ matrix.abi }} -P "$ANDROID_API" build --release --locked -p iroh-host --bins
+
+      - name: Package
+        run: |
+          file target/${{ matrix.target }}/release/iroh-test-client
+          bash ../scripts/ci/package-binaries.sh target/${{ matrix.target }}/release android-${{ matrix.abi }} "$RUNNER_TEMP/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-iroh-android-${{ matrix.abi }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error

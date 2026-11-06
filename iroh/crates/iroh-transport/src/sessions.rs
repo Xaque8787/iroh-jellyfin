@@ -79,12 +79,21 @@ impl SessionStats {
 
     /// Counts one open WebSocket until dropped, or returns `None` when `limit` are already open.
     pub(crate) fn begin_websocket(&self, limit: u64) -> Option<WebSocketGuard<'_>> {
-        self.active_websockets
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |open| {
-                (open < limit).then_some(open + 1)
-            })
-            .ok()?;
-        Some(WebSocketGuard(self))
+        let mut open = self.active_websockets.load(Ordering::Acquire);
+        loop {
+            if open >= limit {
+                return None;
+            }
+            match self.active_websockets.compare_exchange_weak(
+                open,
+                open + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(WebSocketGuard(self)),
+                Err(current) => open = current,
+            }
+        }
     }
 }
 

@@ -649,7 +649,8 @@ mod tests {
     #[test]
     fn websocket_settings_are_reported_and_saved() {
         let fixture = fixture(RelayChoice::Default);
-        let status = body(&call(&fixture, "GET", "/v1/status", ""));
+        let status = call(&fixture, "GET", "/v1/status", "");
+        let status = body(&status);
         assert_eq!(status["websocket"]["enabled"], true);
         assert_eq!(status["websocket"]["origin_header"], "rewrite");
 

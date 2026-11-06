@@ -418,7 +418,10 @@ const FOREIGN_ORIGIN: &str = "http://127.0.0.1:8097";
 async fn open_websocket(session: &ClientSession) -> Result<ClientWebSocket, String> {
     let headers = vec![
         ("origin".to_owned(), FOREIGN_ORIGIN.to_owned()),
-        ("sec-websocket-key".to_owned(), "dGhlIHNhbXBsZSBub25jZQ==".to_owned()),
+        (
+            "sec-websocket-key".to_owned(),
+            "dGhlIHNhbXBsZSBub25jZQ==".to_owned(),
+        ),
     ];
     match session.open_websocket("/ws", headers).await {
         Ok(WebSocketReply::Open(socket)) => Ok(socket),
@@ -443,7 +446,8 @@ async fn echo(socket: &mut ClientWebSocket, message: &'static [u8]) {
 
 async fn expect_closed(socket: &mut ClientWebSocket) {
     let mut rest = Vec::new();
-    tokio::time::timeout(
+    // Either a clean end or a reset counts as closed.
+    let _ = tokio::time::timeout(
         Duration::from_secs(10),
         AsyncReadExt::read_to_end(&mut socket.recv, &mut rest),
     )

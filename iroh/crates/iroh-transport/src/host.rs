@@ -396,7 +396,14 @@ async fn handle_stream(
     if request.upgrade.is_some() {
         drop(active);
         handle_upgrade(
-            &service, &connection, stats, send, recv, request, &log_path, &session,
+            &service,
+            &connection,
+            stats,
+            send,
+            recv,
+            request,
+            &log_path,
+            &session,
         )
         .await;
         return;
@@ -535,7 +542,14 @@ async fn handle_upgrade(
     info!(request = %id, path = %log_path, "WebSocket opened");
     let started = Instant::now();
     let stop = websocket_stop(service, connection, session);
-    let end = websocket::relay(&mut send, &mut recv, io, |bytes| stats.add_bytes(bytes), stop).await;
+    let end = websocket::relay(
+        &mut send,
+        &mut recv,
+        io,
+        |bytes| stats.add_bytes(bytes),
+        stop,
+    )
+    .await;
     match end {
         RelayEnd::Closed => {}
         RelayEnd::Failed => {
@@ -584,7 +598,10 @@ async fn send_refusal(
         status: response.status().as_u16(),
         headers: proxy::response_headers(&response),
     });
-    if write_frame(send, &head, MAX_HTTP_FRAME_BYTES).await.is_err() {
+    if write_frame(send, &head, MAX_HTTP_FRAME_BYTES)
+        .await
+        .is_err()
+    {
         return;
     }
     let outcome = tokio::select! {

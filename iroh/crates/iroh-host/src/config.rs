@@ -229,7 +229,10 @@ impl RunArgs {
 
 /// Empty values count as unset, so a container can pass the variable through without a value.
 fn optional(value: &Option<String>) -> Option<&str> {
-    value.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

@@ -282,7 +282,10 @@ mod tests {
 
     #[test]
     fn recognizes_websocket_upgrades() {
-        let upgrade = headers(&[("connection", "keep-alive, Upgrade"), ("upgrade", "websocket")]);
+        let upgrade = headers(&[
+            ("connection", "keep-alive, Upgrade"),
+            ("upgrade", "websocket"),
+        ]);
         assert!(is_upgrade_request(&Method::GET, &upgrade));
         assert!(!is_upgrade_request(&Method::POST, &upgrade));
         assert!(!is_upgrade_request(
@@ -325,7 +328,10 @@ mod tests {
         let origin = Origin::parse("http://127.0.0.1:9014").unwrap();
         let request = upgrade_request(vec![
             ("origin".into(), "http://127.0.0.1:8097".into()),
-            ("sec-websocket-key".into(), "dGhlIHNhbXBsZSBub25jZQ==".into()),
+            (
+                "sec-websocket-key".into(),
+                "dGhlIHNhbXBsZSBub25jZQ==".into(),
+            ),
             ("connection".into(), "Upgrade".into()),
         ]);
         let rewritten = build_upstream_request(&origin, &request, OriginHeader::Rewrite).unwrap();

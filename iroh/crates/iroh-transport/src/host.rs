@@ -21,12 +21,13 @@ use crate::framing::{FrameError, read_frame, write_frame};
 use crate::net::{PathReport, current_path};
 use crate::policy::{PathKind, TransportPolicy};
 use crate::protocol::{
-    ALPN, AuthOutcome, AuthResult, BODY_CHUNK_BYTES, BodyMode, HttpResponse,
+    ALPN, AuthOutcome, AuthResult, BODY_CHUNK_BYTES, BodyMode, HttpRequest, HttpResponse,
     MAX_CONTROL_FRAME_BYTES, MAX_HTTP_FRAME_BYTES, MAX_REQUEST_BODY_BYTES, Message,
-    PROTOCOL_VERSION, StreamError, close_code, error_code, validate_http_request,
+    PROTOCOL_VERSION, StreamError, WEBSOCKET, close_code, error_code, validate_http_request,
 };
 use crate::proxy::{self, Origin, ProxyBody, UpstreamClient};
 use crate::sessions::{SessionGuard, SessionStats, SessionTable};
+use crate::websocket::{self, MAX_WEBSOCKETS_PER_SESSION, RelayEnd, Upstream, WebSocketSettings};
 
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const REQUEST_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -60,6 +61,10 @@ pub trait DeviceRegistry: Send + Sync + 'static {
     ) -> AuthDecision;
     fn is_authorized(&self, endpoint_id: &str) -> bool;
     fn policy(&self) -> TransportPolicy;
+    /// Read on every WebSocket upgrade and while WebSockets are open, so changes apply live.
+    fn websocket(&self) -> WebSocketSettings {
+        WebSocketSettings::default()
+    }
 }
 
 pub struct HostService {
@@ -200,10 +205,16 @@ async fn handshake(
             return Ok(None);
         }
     };
+    let capabilities = if service.registry.websocket().enabled {
+        vec![WEBSOCKET.to_owned()]
+    } else {
+        Vec::new()
+    };
     let result = Message::AuthResult(AuthResult {
         outcome,
         reason: None,
         transport_policy: policy,
+        capabilities,
     });
     write_frame(&mut send, &result, MAX_CONTROL_FRAME_BYTES)
         .await
@@ -232,6 +243,7 @@ async fn deny(
         outcome: AuthOutcome::Denied,
         reason: Some(code.to_owned()),
         transport_policy: policy,
+        capabilities: Vec::new(),
     });
     if write_frame(send, &result, MAX_CONTROL_FRAME_BYTES)
         .await
@@ -334,7 +346,7 @@ async fn handle_stream(
     session: CancellationToken,
 ) {
     let stats = guard.stats();
-    let _active = stats.begin_request();
+    let active = stats.begin_request();
     let started = Instant::now();
     let request = match timeout(
         REQUEST_HEADER_TIMEOUT,
@@ -380,6 +392,15 @@ async fn handle_stream(
             return;
         }
     };
+
+    if request.upgrade.is_some() {
+        drop(active);
+        handle_upgrade(
+            &service, &connection, stats, send, recv, request, &log_path, &session,
+        )
+        .await;
+        return;
+    }
 
     let body = match request.body {
         BodyMode::None => proxy::empty_body(),
@@ -437,6 +458,146 @@ async fn handle_stream(
         Some(BodyOutcome::UpstreamFailed(bytes)) => {
             let _ = send.reset(VarInt::from_u32(close_code::UPSTREAM_FAILED));
             info!(request = %id, path = %log_path, status, bytes, "origin failed mid-response");
+        }
+        None => {
+            let _ = send.reset(VarInt::from_u32(close_code::SHUTTING_DOWN));
+        }
+    }
+}
+
+/// Opens a WebSocket to the origin and relays it until either side closes, the session ends, or the
+/// host's settings or transport policy no longer allow it.
+#[allow(clippy::too_many_arguments)]
+async fn handle_upgrade(
+    service: &HostService,
+    connection: &Connection,
+    stats: &SessionStats,
+    mut send: SendStream,
+    mut recv: RecvStream,
+    request: HttpRequest,
+    log_path: &str,
+    session: &CancellationToken,
+) {
+    let id = request.request_id.clone();
+    let settings = service.registry.websocket();
+    if !settings.enabled {
+        reply_error(
+            &mut send,
+            &id,
+            error_code::UNSUPPORTED,
+            "WebSockets are turned off on this host",
+        )
+        .await;
+        return;
+    }
+    let Some(_open) = stats.begin_websocket(MAX_WEBSOCKETS_PER_SESSION) else {
+        info!(request = %id, path = %log_path, "WebSocket refused: too many open");
+        reply_error(
+            &mut send,
+            &id,
+            error_code::TOO_MANY_WEBSOCKETS,
+            "this device already has the maximum number of open WebSockets",
+        )
+        .await;
+        return;
+    };
+
+    let upstream = tokio::select! {
+        result = websocket::connect_upstream(&service.origin, &request, settings.origin_header) => result,
+        _ = send.stopped() => return,
+        _ = session.cancelled() => return,
+    };
+    let (headers, io) = match upstream {
+        Ok(Upstream::Switched { headers, io }) => (headers, io),
+        Ok(Upstream::Refused(response)) => {
+            let status = response.status().as_u16();
+            info!(request = %id, path = %log_path, status, "origin refused the WebSocket");
+            send_refusal(&mut send, &id, response, stats, session).await;
+            return;
+        }
+        Err(error) => {
+            info!(request = %id, path = %log_path, code = error.code, "WebSocket failed");
+            reply_error(&mut send, &id, error.code, &error.message).await;
+            return;
+        }
+    };
+    let head = Message::HttpResponse(HttpResponse {
+        request_id: id.clone(),
+        status: 101,
+        headers,
+    });
+    if write_frame(&mut send, &head, MAX_HTTP_FRAME_BYTES)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    info!(request = %id, path = %log_path, "WebSocket opened");
+    let started = Instant::now();
+    let stop = websocket_stop(service, connection, session);
+    let end = websocket::relay(&mut send, &mut recv, io, |bytes| stats.add_bytes(bytes), stop).await;
+    match end {
+        RelayEnd::Closed => {}
+        RelayEnd::Failed => {
+            let _ = send.reset(VarInt::from_u32(close_code::UPSTREAM_FAILED));
+        }
+        RelayEnd::Stopped(code) => {
+            let _ = send.reset(VarInt::from_u32(code));
+        }
+    }
+    info!(request = %id, path = %log_path, ?end, open_secs = started.elapsed().as_secs(), "WebSocket closed");
+}
+
+/// Resolves with a close code once an open WebSocket must end.
+async fn websocket_stop(
+    service: &HostService,
+    connection: &Connection,
+    session: &CancellationToken,
+) -> u32 {
+    let mut recheck = tokio::time::interval(AUTHORIZATION_RECHECK);
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = session.cancelled() => return close_code::SHUTTING_DOWN,
+            _ = recheck.tick() => {
+                if !service.registry.websocket().enabled {
+                    return close_code::NORMAL;
+                }
+                if !service.registry.policy().admits(current_path(connection).kind) {
+                    return close_code::TRANSPORT_POLICY;
+                }
+            }
+        }
+    }
+}
+
+/// Passes an origin's non-101 answer to an upgrade back to the client as an ordinary response.
+async fn send_refusal(
+    send: &mut SendStream,
+    id: &str,
+    response: hyper::Response<Incoming>,
+    stats: &SessionStats,
+    session: &CancellationToken,
+) {
+    let head = Message::HttpResponse(HttpResponse {
+        request_id: id.to_owned(),
+        status: response.status().as_u16(),
+        headers: proxy::response_headers(&response),
+    });
+    if write_frame(send, &head, MAX_HTTP_FRAME_BYTES).await.is_err() {
+        return;
+    }
+    let outcome = tokio::select! {
+        _ = session.cancelled() => None,
+        outcome = pump_body(send, response.into_body(), stats) => Some(outcome),
+    };
+    match outcome {
+        Some(BodyOutcome::Complete(_)) => {
+            let _ = send.finish();
+        }
+        Some(BodyOutcome::ClientGone(_)) => {}
+        Some(BodyOutcome::UpstreamFailed(_)) => {
+            let _ = send.reset(VarInt::from_u32(close_code::UPSTREAM_FAILED));
         }
         None => {
             let _ = send.reset(VarInt::from_u32(close_code::SHUTTING_DOWN));

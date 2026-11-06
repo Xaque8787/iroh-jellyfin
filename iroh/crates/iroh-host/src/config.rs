@@ -8,6 +8,7 @@ use iroh::RelayUrl;
 use iroh_transport::net::RelayChoice;
 use iroh_transport::policy::TransportPolicy;
 use iroh_transport::proxy::Origin;
+use iroh_transport::websocket::{OriginHeader, parse_switch};
 
 use crate::identity::IDENTITY_FILE;
 use crate::state::STATE_FILE;
@@ -91,6 +92,13 @@ pub struct RunArgs {
     /// Control API token. When unset, the token in <data-dir>/control.token is used or created.
     #[arg(long, env = "IROH_CONTROL_TOKEN", hide_env_values = true)]
     pub control_token: Option<String>,
+    /// Forward WebSocket connections: on or off. When omitted, the setting in state.json is used.
+    #[arg(long, env = "IROH_WEBSOCKETS")]
+    pub websockets: Option<String>,
+    /// Origin header sent to the origin on WebSocket upgrades: rewrite or pass_through.
+    /// When omitted, the setting in state.json is used.
+    #[arg(long, env = "IROH_WEBSOCKET_ORIGIN")]
+    pub websocket_origin: Option<String>,
 }
 
 pub const DEFAULT_CONTROL_LISTEN: &str = "127.0.0.1:47950";
@@ -130,6 +138,8 @@ pub struct HostConfig {
     pub policy: Option<TransportPolicy>,
     pub relay: RelayChoice,
     pub control: Option<ControlConfig>,
+    pub websockets_enabled: Option<bool>,
+    pub websocket_origin: Option<OriginHeader>,
 }
 
 impl HostConfig {
@@ -165,6 +175,18 @@ impl RunArgs {
             .map_err(|error| problems.push(error))
             .ok()
             .flatten();
+        let websockets_enabled = optional(&self.websockets)
+            .map(parse_switch)
+            .transpose()
+            .map_err(|error| problems.push(format!("IROH_WEBSOCKETS: {error}")))
+            .ok()
+            .flatten();
+        let websocket_origin = optional(&self.websocket_origin)
+            .map(str::parse::<OriginHeader>)
+            .transpose()
+            .map_err(|error| problems.push(format!("IROH_WEBSOCKET_ORIGIN: {error}")))
+            .ok()
+            .flatten();
         match origin {
             Some(origin) if problems.is_empty() => Ok(HostConfig {
                 data_dir: self.data.data_dir.clone(),
@@ -172,6 +194,8 @@ impl RunArgs {
                 policy,
                 relay,
                 control,
+                websockets_enabled,
+                websocket_origin,
             }),
             _ => Err(problems),
         }
@@ -203,6 +227,11 @@ impl RunArgs {
     }
 }
 
+/// Empty values count as unset, so a container can pass the variable through without a value.
+fn optional(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,7 +247,31 @@ mod tests {
             control_listen: DEFAULT_CONTROL_LISTEN.into(),
             control_allow_remote: false,
             control_token: None,
+            websockets: None,
+            websocket_origin: None,
         }
+    }
+
+    #[test]
+    fn websocket_settings_are_optional_and_validated() {
+        let mut run = args("http://127.0.0.1:8096", None, None);
+        let config = run.validate().unwrap();
+        assert_eq!(config.websockets_enabled, None);
+        assert_eq!(config.websocket_origin, None);
+
+        run.websockets = Some("".into());
+        run.websocket_origin = Some(" ".into());
+        assert_eq!(run.validate().unwrap().websockets_enabled, None);
+
+        run.websockets = Some("OFF".into());
+        run.websocket_origin = Some("pass_through".into());
+        let config = run.validate().unwrap();
+        assert_eq!(config.websockets_enabled, Some(false));
+        assert_eq!(config.websocket_origin, Some(OriginHeader::PassThrough));
+
+        run.websockets = Some("maybe".into());
+        run.websocket_origin = Some("keep".into());
+        assert_eq!(run.validate().unwrap_err().len(), 2);
     }
 
     #[test]

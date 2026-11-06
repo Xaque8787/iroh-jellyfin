@@ -83,6 +83,15 @@ public class IrohController : ControllerBase
     public Task<ActionResult> SetPolicy([FromBody] JsonElement body, CancellationToken cancellationToken)
         => Forward(HttpMethod.Put, "policy", body.GetRawText(), cancellationToken);
 
+    /// <summary>Turns WebSocket forwarding on or off and chooses how the Origin header is sent.</summary>
+    /// <param name="body">JSON with optional enabled and origin_header fields.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The control API reply.</returns>
+    [HttpPut("WebSocket")]
+    [Consumes(MediaTypeNames.Application.Json)]
+    public Task<ActionResult> SetWebSocket([FromBody] JsonElement body, CancellationToken cancellationToken)
+        => Forward(HttpMethod.Put, "websocket", body.GetRawText(), cancellationToken);
+
     private static async Task<ActionResult> Forward(
         HttpMethod method,
         string path,

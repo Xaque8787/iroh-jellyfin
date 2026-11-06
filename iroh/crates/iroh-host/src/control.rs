@@ -23,6 +23,7 @@ use iroh_transport::pairing::{generate_token, hash_token};
 use iroh_transport::policy::TransportPolicy;
 use iroh_transport::protocol::PROTOCOL_VERSION;
 use iroh_transport::sessions::SessionTable;
+use iroh_transport::websocket::OriginHeader;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -266,6 +267,15 @@ struct PolicyChange {
     policy: TransportPolicy,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebSocketChange {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    origin_header: Option<OriginHeader>,
+}
+
 fn parse_body<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, Reply> {
     serde_json::from_slice(body).map_err(|error| {
         Reply::error(
@@ -315,7 +325,8 @@ pub fn route(
         (["invitations"], "POST") => create_invitation(context, body),
         (["invitations", id], "DELETE") => cancel_invitation(context, id),
         (["policy"], "PUT") => set_policy(context, body),
-        (["status" | "sessions" | "devices" | "invitations" | "policy"], _)
+        (["websocket"], "PUT") => set_websocket(context, body),
+        (["status" | "sessions" | "devices" | "invitations" | "policy" | "websocket"], _)
         | (["devices" | "invitations", _], _) => Err(Reply::method_not_allowed()),
         _ => Err(Reply::not_found("unknown control API path")),
     };
@@ -352,6 +363,7 @@ fn status(context: &ControlContext) -> Reply {
             "relay_connected": addr.addrs.iter().any(|transport| transport.is_relay()),
             "addr": addr,
             "policy": policy_json(context, snapshot.policy),
+            "websocket": snapshot.websocket,
             "devices": snapshot.devices.iter().filter(|device| device.is_active()).count(),
             "pending_invitations": snapshot
                 .invitations
@@ -462,6 +474,15 @@ fn set_policy(context: &ControlContext, body: &[u8]) -> Result<Reply, Reply> {
         StatusCode::OK,
         policy_json(context, request.policy),
     ))
+}
+
+fn set_websocket(context: &ControlContext, body: &[u8]) -> Result<Reply, Reply> {
+    let request: WebSocketChange = parse_body(body)?;
+    let settings = context
+        .state
+        .set_websocket(request.enabled, request.origin_header)
+        .map_err(Reply::state_error)?;
+    Ok(Reply::json(StatusCode::OK, json!(settings)))
 }
 
 #[cfg(test)]
@@ -623,6 +644,41 @@ mod tests {
         let reply = call(&fixture, "PUT", "/v1/policy", r#"{"policy":"relay_only"}"#);
         assert_eq!(reply.status, StatusCode::CONFLICT);
         assert_eq!(fixture.context.state.policy(), TransportPolicy::Auto);
+    }
+
+    #[test]
+    fn websocket_settings_are_reported_and_saved() {
+        let fixture = fixture(RelayChoice::Default);
+        let status = body(&call(&fixture, "GET", "/v1/status", ""));
+        assert_eq!(status["websocket"]["enabled"], true);
+        assert_eq!(status["websocket"]["origin_header"], "rewrite");
+
+        let reply = call(&fixture, "PUT", "/v1/websocket", r#"{"enabled":false}"#);
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(body(&reply)["enabled"], false);
+        assert_eq!(body(&reply)["origin_header"], "rewrite");
+
+        let reply = call(
+            &fixture,
+            "PUT",
+            "/v1/websocket",
+            r#"{"origin_header":"pass_through"}"#,
+        );
+        assert_eq!(body(&reply)["enabled"], false);
+        let saved = fixture.context.state.websocket();
+        assert!(!saved.enabled);
+        assert_eq!(saved.origin_header, OriginHeader::PassThrough);
+
+        for bad in [r#"{"origin_header":"other"}"#, r#"{"enable":true}"#, "nope"] {
+            assert_eq!(
+                call(&fixture, "PUT", "/v1/websocket", bad).status,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(
+            call(&fixture, "GET", "/v1/websocket", "").status,
+            StatusCode::METHOD_NOT_ALLOWED
+        );
     }
 
     #[test]

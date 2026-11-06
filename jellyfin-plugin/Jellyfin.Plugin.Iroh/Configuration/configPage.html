@@ -46,6 +46,7 @@
 
                 <div class="iroh-grid">
                     <div class="iroh-card"><div class="iroh-card-label">Policy</div><div class="iroh-card-value" id="irohPolicyValue">-</div></div>
+                    <div class="iroh-card"><div class="iroh-card-label">WebSockets</div><div class="iroh-card-value" id="irohWebSocketValue">-</div></div>
                     <div class="iroh-card"><div class="iroh-card-label">Relay</div><div class="iroh-card-value" id="irohRelayValue">-</div></div>
                     <div class="iroh-card"><div class="iroh-card-label">Connected now</div><div class="iroh-card-value" id="irohSessionsValue">-</div></div>
                     <div class="iroh-card"><div class="iroh-card-label">Paired devices</div><div class="iroh-card-value" id="irohDevicesValue">-</div></div>
@@ -128,6 +129,32 @@
                     </form>
                     <div class="fieldDescription" id="irohEnforcement"></div>
                     <div class="fieldDescription">Relay only and P2P only are best effort in this version. See docs/transport-policies.md for what is and is not guaranteed.</div>
+                </div>
+
+                <div class="iroh-section">
+                    <h3 class="sectionTitle">WebSockets</h3>
+                    <form id="irohWebSocketForm">
+                        <div class="iroh-row">
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="irohWebSocketEnabled">WebSockets</label>
+                                <select id="irohWebSocketEnabled" is="emby-select" class="emby-select-withcolor emby-select">
+                                    <option value="on">On: forward WebSocket connections</option>
+                                    <option value="off">Off: refuse them, as in earlier versions</option>
+                                </select>
+                            </div>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="irohWebSocketOrigin">Origin header</label>
+                                <select id="irohWebSocketOrigin" is="emby-select" class="emby-select-withcolor emby-select">
+                                    <option value="rewrite">Rewrite to the server's own address</option>
+                                    <option value="pass_through">Pass through unchanged</option>
+                                </select>
+                            </div>
+                            <div>
+                                <button is="emby-button" type="submit" class="raised button-submit emby-button"><span>Save WebSockets</span></button>
+                            </div>
+                        </div>
+                    </form>
+                    <div class="fieldDescription">Changes apply within a few seconds; turning WebSockets off closes open ones. Normal requests are not affected. When IROH_WEBSOCKETS or IROH_WEBSOCKET_ORIGIN is set for iroh-host, that value is applied again each time the host starts.</div>
                 </div>
 
                 <div class="iroh-section">
@@ -249,9 +276,20 @@
                     show($('#irohRestart'), policy.restart_required);
                 }
 
+                function renderWebSocket(settings) {
+                    if (!settings) {
+                        $('#irohWebSocketValue').textContent = 'Not supported by this host';
+                        return;
+                    }
+                    $('#irohWebSocketValue').textContent = settings.enabled ? 'On (' + settings.origin_header + ')' : 'Off';
+                    $('#irohWebSocketEnabled').value = settings.enabled ? 'on' : 'off';
+                    $('#irohWebSocketOrigin').value = settings.origin_header;
+                }
+
                 function loadStatus() {
                     return request('GET', 'Status').then(function (status) {
                         renderPolicy(status.policy);
+                        renderWebSocket(status.websocket);
                         var relay = status.relay.mode === 'disabled' ? 'Disabled' : (status.relay_connected ? 'Connected' : 'Not connected');
                         if (status.relay.mode === 'custom') { relay += ' (custom)'; }
                         $('#irohRelayValue').textContent = relay;
@@ -268,7 +306,7 @@
                             pill(row, s.path.kind, s.path.kind);
                             cell(row, s.path.rtt_ms === null || s.path.rtt_ms === undefined ? '-' : s.path.rtt_ms.toFixed(1) + ' ms');
                             cell(row, s.path.remote_addr || '-', 'iroh-mono');
-                            cell(row, s.requests + (s.active_requests ? ' (' + s.active_requests + ' active)' : ''));
+                            cell(row, s.requests + (s.active_requests ? ' (' + s.active_requests + ' active)' : '') + (s.active_websockets ? ', ' + s.active_websockets + ' WebSocket' + (s.active_websockets === 1 ? '' : 's') : ''));
                             cell(row, bytes(s.bytes_sent));
                         });
                         $('#irohSessionsValue').textContent = String(data.sessions.length);
@@ -368,6 +406,17 @@
                     e.preventDefault();
                     request('PUT', 'Policy', { policy: $('#irohPolicy').value })
                         .then(function (policy) { renderPolicy(policy); showError(null); })
+                        .catch(fail);
+                    return false;
+                });
+
+                $('#irohWebSocketForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    request('PUT', 'WebSocket', {
+                        enabled: $('#irohWebSocketEnabled').value === 'on',
+                        origin_header: $('#irohWebSocketOrigin').value
+                    })
+                        .then(function (settings) { renderWebSocket(settings); showError(null); })
                         .catch(fail);
                     return false;
                 });

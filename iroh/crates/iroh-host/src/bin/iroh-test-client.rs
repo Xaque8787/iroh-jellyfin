@@ -21,10 +21,11 @@ use iroh::{Endpoint, EndpointAddr, SecretKey};
 use iroh_host::config::parse_relay;
 use iroh_host::fsutil::{ensure_private_dir, write_private_atomic};
 use iroh_host::identity;
-use iroh_transport::client::{ClientError, ClientSession};
+use iroh_transport::client::{ClientError, ClientResponse, ClientSession, WebSocketReply};
 use iroh_transport::invite::InviteLink;
 use iroh_transport::net::{EndpointOptions, bind_endpoint};
 use iroh_transport::protocol::{BODY_CHUNK_BYTES, MAX_REQUEST_BODY_BYTES};
+use iroh_transport::websocket;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -292,6 +293,7 @@ async fn proxy(common: Common, endpoint: Endpoint, listen: SocketAddr) -> Result
             let service = service_fn(move |request| proxy_request(state.clone(), request));
             let _ = http1::Builder::new()
                 .serve_connection(TokioIo::new(socket), service)
+                .with_upgrades()
                 .await;
         });
     }
@@ -327,6 +329,9 @@ async fn forward(
                 .map(|value| (name.as_str().to_owned(), value.to_owned()))
         })
         .collect();
+    if websocket::is_upgrade_request(request.method(), request.headers()) {
+        return forward_websocket(state, request, &path, headers).await;
+    }
     let body = Limited::new(request.into_body(), MAX_REQUEST_BODY_BYTES)
         .collect()
         .await
@@ -346,19 +351,76 @@ async fn forward(
     let response = session
         .request(&method, &path, headers, body)
         .await
-        .map_err(|error| {
-            let status = match &error {
-                ClientError::Request { code, .. } if code == "transport_policy_denied" => {
-                    StatusCode::FORBIDDEN
-                }
-                ClientError::Request { code, .. } if code == "upstream_timeout" => {
-                    StatusCode::GATEWAY_TIMEOUT
-                }
-                _ => StatusCode::BAD_GATEWAY,
-            };
-            (status, error.to_string())
-        })?;
+        .map_err(gateway_error)?;
+    stream_response(response)
+}
 
+async fn forward_websocket(
+    state: &ProxyState,
+    request: Request<Incoming>,
+    path: &str,
+    headers: Vec<(String, String)>,
+) -> Result<Response<ProxyBody>, (StatusCode, String)> {
+    let session = state
+        .session()
+        .await
+        .map_err(|error| (StatusCode::BAD_GATEWAY, error))?;
+    let socket = match session
+        .open_websocket(path, headers)
+        .await
+        .map_err(gateway_error)?
+    {
+        WebSocketReply::Open(socket) => socket,
+        WebSocketReply::Refused(response) => return stream_response(response),
+    };
+    let mut builder = Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(http::header::CONNECTION, "upgrade")
+        .header(http::header::UPGRADE, "websocket");
+    for (name, value) in &socket.head.headers {
+        builder = builder.header(name, value);
+    }
+    let response = builder
+        .body(empty_body())
+        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
+    tokio::spawn(async move {
+        let mut socket = socket;
+        match hyper::upgrade::on(request).await {
+            Ok(upgraded) => {
+                let end = websocket::relay(
+                    &mut socket.send,
+                    &mut socket.recv,
+                    TokioIo::new(upgraded),
+                    |_| {},
+                    std::future::pending::<u32>(),
+                )
+                .await;
+                eprintln!("websocket ended: {end:?}");
+            }
+            Err(error) => eprintln!("websocket upgrade failed: {error}"),
+        }
+    });
+    Ok(response)
+}
+
+fn gateway_error(error: ClientError) -> (StatusCode, String) {
+    let status = match &error {
+        ClientError::Request { code, .. } if code == "transport_policy_denied" => {
+            StatusCode::FORBIDDEN
+        }
+        ClientError::Request { code, .. } if code == "upstream_timeout" => {
+            StatusCode::GATEWAY_TIMEOUT
+        }
+        ClientError::Request { code, .. } if code == "unsupported" => StatusCode::NOT_IMPLEMENTED,
+        ClientError::Request { code, .. } if code == "too_many_websockets" => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        _ => StatusCode::BAD_GATEWAY,
+    };
+    (status, error.to_string())
+}
+
+fn stream_response(response: ClientResponse) -> Result<Response<ProxyBody>, (StatusCode, String)> {
     let mut builder = Response::builder().status(response.head.status);
     for (name, value) in &response.head.headers {
         builder = builder.header(name, value);
@@ -369,6 +431,12 @@ async fn forward(
     builder
         .body(StreamBody::new(frames).boxed_unsync())
         .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))
+}
+
+fn empty_body() -> ProxyBody {
+    Full::new(Bytes::new())
+        .map_err(|never| match never {})
+        .boxed_unsync()
 }
 
 fn text_response(status: StatusCode, message: String) -> Response<ProxyBody> {

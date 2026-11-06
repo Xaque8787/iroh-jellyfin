@@ -14,6 +14,7 @@ use iroh_transport::pairing::{
     self, DEFAULT_INVITATION_TTL_SECS, FailureLimiter, Invitation, RedeemError,
 };
 use iroh_transport::policy::TransportPolicy;
+use iroh_transport::websocket::{OriginHeader, WebSocketSettings};
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil::{restrict_permissions, write_private_atomic};
@@ -51,6 +52,8 @@ pub struct StateFile {
     #[serde(default)]
     pub policy: TransportPolicy,
     #[serde(default)]
+    pub websocket: WebSocketSettings,
+    #[serde(default)]
     pub devices: Vec<Device>,
     #[serde(default)]
     pub invitations: Vec<Invitation>,
@@ -63,6 +66,7 @@ impl Default for StateFile {
         Self {
             version: STATE_VERSION,
             policy: TransportPolicy::default(),
+            websocket: WebSocketSettings::default(),
             devices: Vec::new(),
             invitations: Vec::new(),
             pairing_failures: FailureLimiter::default(),
@@ -136,6 +140,27 @@ impl HostState {
 
     pub fn set_policy(&self, policy: TransportPolicy) -> Result<(), StateError> {
         self.update(|file| file.policy = policy)
+    }
+
+    pub fn websocket(&self) -> WebSocketSettings {
+        self.lock().websocket
+    }
+
+    /// Changes the stored WebSocket settings; `None` keeps the current value.
+    pub fn set_websocket(
+        &self,
+        enabled: Option<bool>,
+        origin_header: Option<OriginHeader>,
+    ) -> Result<WebSocketSettings, StateError> {
+        self.update(|file| {
+            if let Some(enabled) = enabled {
+                file.websocket.enabled = enabled;
+            }
+            if let Some(origin_header) = origin_header {
+                file.websocket.origin_header = origin_header;
+            }
+            file.websocket
+        })
     }
 
     pub fn is_authorized(&self, endpoint_id: &str) -> bool {
@@ -494,6 +519,21 @@ mod tests {
                 .policy(),
             TransportPolicy::P2pOnly
         );
+    }
+
+    #[test]
+    fn websocket_settings_default_on_and_persist() {
+        let dir = TempDir::create();
+        let path = dir.0.join(STATE_FILE);
+        let state = HostState::open(&path, None).unwrap();
+        assert_eq!(state.websocket(), WebSocketSettings::default());
+        let changed = state
+            .set_websocket(Some(false), Some(OriginHeader::PassThrough))
+            .unwrap();
+        assert!(!changed.enabled);
+        let kept = state.set_websocket(None, None).unwrap();
+        assert_eq!(kept, changed);
+        assert_eq!(HostState::open(&path, None).unwrap().websocket(), changed);
     }
 
     #[test]

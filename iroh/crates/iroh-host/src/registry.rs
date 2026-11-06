@@ -6,6 +6,7 @@ use iroh_transport::host::{AuthDecision, DeviceRegistry};
 use iroh_transport::pairing::RedeemError;
 use iroh_transport::policy::TransportPolicy;
 use iroh_transport::protocol::error_code;
+use iroh_transport::websocket::WebSocketSettings;
 
 use crate::state::{HostState, PairOutcome, now_secs};
 
@@ -57,5 +58,9 @@ impl DeviceRegistry for StateRegistry {
 
     fn policy(&self) -> TransportPolicy {
         self.state.policy()
+    }
+
+    fn websocket(&self) -> WebSocketSettings {
+        self.state.websocket()
     }
 }

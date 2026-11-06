@@ -19,6 +19,10 @@ services:
       # IROH_TRANSPORT_POLICY: auto
       # A custom relay URL, or "none" to disable relays (direct connections only).
       # IROH_RELAY_URL: https://relay.example.com
+      # on | off. Forward WebSocket connections. When set, overrides the dashboard setting.
+      # IROH_WEBSOCKETS: "on"
+      # rewrite | pass_through. Origin header sent to the server on WebSocket connections.
+      # IROH_WEBSOCKET_ORIGIN: rewrite
       RUST_LOG: info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info
     volumes:
       - ./config:/config

@@ -28,6 +28,7 @@ struct SessionEntry {
 pub(crate) struct SessionStats {
     requests: AtomicU64,
     active_requests: AtomicU64,
+    active_websockets: AtomicU64,
     bytes_sent: AtomicU64,
 }
 
@@ -39,6 +40,7 @@ pub struct SessionInfo {
     pub path: PathReport,
     pub requests: u64,
     pub active_requests: u64,
+    pub active_websockets: u64,
     pub bytes_sent: u64,
 }
 
@@ -73,6 +75,25 @@ impl SessionStats {
 
     pub(crate) fn add_bytes(&self, bytes: u64) {
         self.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Counts one open WebSocket until dropped, or returns `None` when `limit` are already open.
+    pub(crate) fn begin_websocket(&self, limit: u64) -> Option<WebSocketGuard<'_>> {
+        self.active_websockets
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |open| {
+                (open < limit).then_some(open + 1)
+            })
+            .ok()?;
+        Some(WebSocketGuard(self))
+    }
+}
+
+/// Counts one open WebSocket until dropped.
+pub(crate) struct WebSocketGuard<'a>(&'a SessionStats);
+
+impl Drop for WebSocketGuard<'_> {
+    fn drop(&mut self) {
+        self.0.active_websockets.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -121,6 +142,7 @@ impl SessionTable {
                 path: current_path(&entry.connection),
                 requests: entry.stats.requests.load(Ordering::Relaxed),
                 active_requests: entry.stats.active_requests.load(Ordering::Relaxed),
+                active_websockets: entry.stats.active_websockets.load(Ordering::Relaxed),
                 bytes_sent: entry.stats.bytes_sent.load(Ordering::Relaxed),
             })
             .collect();

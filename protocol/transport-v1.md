@@ -91,9 +91,24 @@ Cancellation: the client may stop or reset the stream at any time, for example w
 
 Transport policy: before forwarding, the host checks the connection's selected path against the policy. Under `p2p_only`, it waits up to 5 seconds for Iroh to select a direct path before refusing with `transport_policy_denied`. See `docs/transport-policies.md` for exactly what this does and does not guarantee.
 
+## WebSockets
+
+WebSocket support is optional and negotiated, so older clients and hosts keep working unchanged.
+
+- A client that can carry WebSockets lists `"websocket"` in HELLO `capabilities`.
+- When the client offered it and WebSockets are switched on, the host lists `"websocket"` in AUTH_RESULT `capabilities` (omitted when empty). Clients must not send upgrades otherwise.
+- To open one, the client sends an HTTP_REQUEST on a new bidirectional stream with `"method":"GET"`, `"upgrade":"websocket"`, `"body":"none"`, and the browser's headers (for example `sec-websocket-key`, `sec-websocket-version`, `sec-websocket-protocol`, `origin`). Hop-by-hop headers are dropped; the host sets `Host`, `Connection: upgrade`, and `Upgrade: websocket` itself. `upgrade` is the only accepted value.
+- The host connects to the origin on a dedicated connection. If the origin answers `101`, the host sends HTTP_RESPONSE with `"status":101` and the origin's headers (without hop-by-hop ones). From then on the stream carries raw bytes in both directions. The host does not read or log them, and it does not interpret WebSocket frames.
+- If the origin answers anything else, the host returns it like a normal response (head, then body) and the stream ends.
+- Errors before the switch use STREAM_ERROR: `unsupported` (WebSockets switched off), `too_many_websockets` (more than 16 open on this session), `transport_policy_denied`, `upstream_unavailable`, `upstream_timeout`.
+- Each side finishes its send direction to close. After one direction ends, the other has 10 seconds to finish before the host resets the stream.
+- The host resets open WebSocket streams with code 0 when WebSockets are switched off, 4 when the current path no longer meets the transport policy (both re-checked every 2 seconds), and 5 on shutdown. Revoking a device closes the connection, which ends its WebSockets.
+
+**Origin header.** With `rewrite` (the default), an `Origin` header from the client is replaced by the origin's own address, for example `http://127.0.0.1:8096`, so servers that only accept same-origin WebSockets accept the connection. With `pass_through` it is forwarded unchanged. Ordinary HTTP requests are never rewritten.
+
 ## Error codes
 
-`protocol_version_unsupported`, `protocol_violation`, `not_authorized`, `pairing_token_invalid`, `pairing_rate_limited`, `transport_policy_denied`, `bad_request`, `unsupported`, `payload_too_large`, `upstream_unavailable`, `upstream_timeout`, `revoked`, `shutting_down`.
+`protocol_version_unsupported`, `protocol_violation`, `not_authorized`, `pairing_token_invalid`, `pairing_rate_limited`, `transport_policy_denied`, `bad_request`, `unsupported`, `payload_too_large`, `upstream_unavailable`, `upstream_timeout`, `too_many_websockets`, `revoked`, `shutting_down`.
 
 ## Close and reset codes
 

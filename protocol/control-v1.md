@@ -67,6 +67,7 @@ Non-2xx responses carry:
     "relay_transport_only": false,
     "restart_required": false
   },
+  "websocket": {"enabled": true, "origin_header": "rewrite"},
   "devices": 3,
   "pending_invitations": 1,
   "sessions": 1,
@@ -87,7 +88,7 @@ Live sessions, with the path Iroh has selected right now:
 {"sessions":[{
   "endpoint_id":"9436...","name":"Living room TV","connected_at":1793740000,
   "path":{"kind":"direct","rtt_ms":1.3,"remote_addr":"Ip(192.168.1.20:40944)","open_paths":1},
-  "requests":42,"active_requests":1,"bytes_sent":73400320
+  "requests":42,"active_requests":1,"active_websockets":1,"bytes_sent":73400320
 }]}
 ```
 
@@ -134,3 +135,15 @@ Cancels an unredeemed invitation: `204`, or `404`.
 Request: `{"policy":"auto|relay_only|p2p_only"}`. Response `200` has the same shape as `status.policy`. It returns `409` when `relay_only` is requested but relays are disabled.
 
 The policy is saved in `state.json`. Request admission follows it immediately. Starting or stopping relay-only transports needs a host restart, which `restart_required` reports. A `--policy` / `IROH_TRANSPORT_POLICY` setting overrides the saved value at every start.
+
+### `PUT /v1/websocket`
+
+Request: `{"enabled":true|false,"origin_header":"rewrite|pass_through"}`. Both fields are optional; a missing field keeps its current value, and unknown fields are rejected with `400`. Response `200` has the same shape as `status.websocket`:
+
+```json
+{"enabled":true,"origin_header":"rewrite"}
+```
+
+The settings are saved in `state.json` and apply without a restart. A new WebSocket checks them when it opens, and open WebSockets re-check them every 2 seconds, so turning WebSockets off closes the open ones. Plain HTTP requests are never affected. `--websockets` / `IROH_WEBSOCKETS` and `--websocket-origin` / `IROH_WEBSOCKET_ORIGIN` override the saved values at every start.
+
+`status` includes the current `websocket` object, and each entry in `sessions` includes `active_websockets`.

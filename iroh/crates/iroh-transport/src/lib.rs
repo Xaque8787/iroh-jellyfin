@@ -11,3 +11,4 @@ pub mod policy;
 pub mod protocol;
 pub mod proxy;
 pub mod sessions;
+pub mod websocket;

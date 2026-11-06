@@ -82,6 +82,19 @@ impl Origin {
         self.base.to_string()
     }
 
+    /// `host:port` as sent in the `Host` header.
+    pub fn authority(&self) -> &str {
+        self.base
+            .authority()
+            .map(|a| a.as_str())
+            .unwrap_or_default()
+    }
+
+    /// The origin as a browser would name it in an `Origin` header, for example `http://127.0.0.1:8096`.
+    pub fn web_origin(&self) -> String {
+        format!("http://{}", self.authority())
+    }
+
     /// Host and port to open a TCP connection to. IPv6 brackets are removed.
     pub fn host_port(&self) -> (String, u16) {
         let host = self.base.host().unwrap_or_default();
@@ -97,7 +110,7 @@ pub struct ProxyError {
 }
 
 impl ProxyError {
-    fn bad_request(message: &str) -> Self {
+    pub(crate) fn bad_request(message: &str) -> Self {
         Self {
             code: error_code::BAD_REQUEST,
             message: message.to_owned(),
@@ -185,7 +198,7 @@ pub fn response_headers(response: &Response<Incoming>) -> Vec<(String, String)> 
         .collect()
 }
 
-fn is_hop_by_hop(name: &str) -> bool {
+pub(crate) fn is_hop_by_hop(name: &str) -> bool {
     HOP_BY_HOP_HEADERS
         .iter()
         .any(|hop| name.eq_ignore_ascii_case(hop))
@@ -243,6 +256,7 @@ mod tests {
             headers: vec![],
             body: crate::protocol::BodyMode::None,
             content_length: None,
+            upgrade: None,
         };
         let error = forward(
             &new_upstream_client(),

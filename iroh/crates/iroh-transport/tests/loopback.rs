@@ -1,7 +1,7 @@
 //! End-to-end tests over real Iroh connections on the local machine, with relays disabled.
 //!
 //! A small HTTP origin stands in for Jellyfin. Covers pairing, reconnecting, Range, concurrency,
-//! request bodies, cancellation, revocation, and the transport policy gate.
+//! request bodies, cancellation, revocation, the transport policy gate, and WebSockets.
 
 use std::collections::HashSet;
 use std::convert::Infallible;
@@ -19,12 +19,13 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use iroh::{Endpoint, EndpointAddr, SecretKey};
-use iroh_transport::client::{ClientError, ClientSession};
+use iroh_transport::client::{ClientError, ClientSession, ClientWebSocket, WebSocketReply};
 use iroh_transport::host::{AuthDecision, DeviceRegistry, HostService, serve};
 use iroh_transport::net::{EndpointOptions, RelayChoice, bind_endpoint};
 use iroh_transport::policy::TransportPolicy;
 use iroh_transport::protocol::{ALPN, AuthOutcome, error_code};
 use iroh_transport::proxy::Origin;
+use iroh_transport::websocket::{MAX_WEBSOCKETS_PER_SESSION, OriginHeader, WebSocketSettings};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -96,6 +97,35 @@ async fn origin_handler(
             });
             Response::new(StreamBody::new(chunks).boxed_unsync())
         }
+        "/ws" if request.headers().contains_key("upgrade") => {
+            let text = |name: &str| {
+                request
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned)
+            };
+            // Like many media servers, accept the upgrade only from the server's own web origin.
+            let seen_origin = text("origin");
+            let own_origin = text("host").map(|host| format!("http://{host}"));
+            if seen_origin.is_some() && seen_origin != own_origin {
+                return Ok(full(StatusCode::FORBIDDEN, b"cross-origin".to_vec()));
+            }
+            let mut response = full(StatusCode::SWITCHING_PROTOCOLS, Vec::new());
+            let headers = response.headers_mut();
+            headers.insert("connection", "upgrade".parse().unwrap());
+            headers.insert("upgrade", "websocket".parse().unwrap());
+            if let Some(seen) = seen_origin {
+                headers.insert("x-seen-origin", seen.parse().unwrap());
+            }
+            tokio::spawn(async move {
+                if let Ok(upgraded) = hyper::upgrade::on(request).await {
+                    let (mut read, mut write) = tokio::io::split(TokioIo::new(upgraded));
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                }
+            });
+            response
+        }
         _ => full(StatusCode::NOT_FOUND, b"not found".to_vec()),
     };
     Ok(response)
@@ -118,6 +148,7 @@ async fn start_origin() -> (SocketAddr, mpsc::UnboundedReceiver<()>) {
                 let service = service_fn(move |req| origin_handler(req, tx.clone()));
                 let _ = http1::Builder::new()
                     .serve_connection(TokioIo::new(socket), service)
+                    .with_upgrades()
                     .await;
             });
         }
@@ -129,6 +160,7 @@ async fn start_origin() -> (SocketAddr, mpsc::UnboundedReceiver<()>) {
 struct MemoryRegistry {
     devices: Mutex<HashSet<String>>,
     policy: Mutex<TransportPolicy>,
+    websocket: Mutex<WebSocketSettings>,
 }
 
 impl MemoryRegistry {
@@ -138,6 +170,10 @@ impl MemoryRegistry {
 
     fn set_policy(&self, policy: TransportPolicy) {
         *self.policy.lock().unwrap() = policy;
+    }
+
+    fn set_websocket(&self, settings: WebSocketSettings) {
+        *self.websocket.lock().unwrap() = settings;
     }
 }
 
@@ -164,10 +200,15 @@ impl DeviceRegistry for MemoryRegistry {
     fn policy(&self) -> TransportPolicy {
         *self.policy.lock().unwrap()
     }
+
+    fn websocket(&self) -> WebSocketSettings {
+        *self.websocket.lock().unwrap()
+    }
 }
 
 struct Harness {
     host_addr: EndpointAddr,
+    origin_addr: SocketAddr,
     registry: Arc<MemoryRegistry>,
     origin_dropped: mpsc::UnboundedReceiver<()>,
     shutdown: CancellationToken,
@@ -199,6 +240,7 @@ async fn start_host() -> Harness {
     tokio::spawn(serve(endpoint, service, shutdown.clone()));
     Harness {
         host_addr,
+        origin_addr,
         registry,
         origin_dropped,
         shutdown,
@@ -369,4 +411,161 @@ async fn policy_gate_follows_the_selected_path() {
         ),
         Err(other) => panic!("unexpected error: {other}"),
     }
+}
+
+const FOREIGN_ORIGIN: &str = "http://127.0.0.1:8097";
+
+async fn open_websocket(session: &ClientSession) -> Result<ClientWebSocket, String> {
+    let headers = vec![
+        ("origin".to_owned(), FOREIGN_ORIGIN.to_owned()),
+        ("sec-websocket-key".to_owned(), "dGhlIHNhbXBsZSBub25jZQ==".to_owned()),
+    ];
+    match session.open_websocket("/ws", headers).await {
+        Ok(WebSocketReply::Open(socket)) => Ok(socket),
+        Ok(WebSocketReply::Refused(response)) => Err(format!("refused {}", response.head.status)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+async fn echo(socket: &mut ClientWebSocket, message: &'static [u8]) {
+    socket
+        .send
+        .write_chunk(Bytes::from_static(message))
+        .await
+        .unwrap();
+    let mut reply = vec![0u8; message.len()];
+    tokio::time::timeout(Duration::from_secs(10), socket.recv.read_exact(&mut reply))
+        .await
+        .expect("no echo from the origin")
+        .unwrap();
+    assert_eq!(reply, message);
+}
+
+async fn expect_closed(socket: &mut ClientWebSocket) {
+    let mut rest = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        AsyncReadExt::read_to_end(&mut socket.recv, &mut rest),
+    )
+    .await
+    .expect("WebSocket stayed open");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn websockets_relay_bytes_and_rewrite_the_origin_header() {
+    let harness = start_host().await;
+    let client = new_client().await;
+    let session = connect(&harness, &client, Some(TOKEN)).await.unwrap();
+    assert!(session.supports_websocket());
+
+    let mut socket = open_websocket(&session).await.unwrap();
+    assert_eq!(socket.head.status, 101);
+    let own_origin = format!("http://{}", harness.origin_addr);
+    assert!(
+        socket
+            .head
+            .headers
+            .iter()
+            .any(|(name, value)| name == "x-seen-origin" && value == &own_origin),
+        "{:?}",
+        socket.head.headers
+    );
+    echo(&mut socket, b"hello").await;
+    // Plain HTTP keeps working while a WebSocket is open.
+    let (status, _, body) = read_all(&session, "/file", Some("bytes=0-9")).await;
+    assert_eq!(status, 206);
+    assert_eq!(body, file_bytes()[..10]);
+    echo(&mut socket, b"again").await;
+
+    socket.send.finish().unwrap();
+    expect_closed(&mut socket).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pass_through_forwards_the_original_origin_header() {
+    let harness = start_host().await;
+    harness.registry.set_websocket(WebSocketSettings {
+        enabled: true,
+        origin_header: OriginHeader::PassThrough,
+    });
+    let client = new_client().await;
+    let session = connect(&harness, &client, Some(TOKEN)).await.unwrap();
+    assert_eq!(
+        open_websocket(&session).await.err().as_deref(),
+        Some("refused 403")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn switching_websockets_off_closes_them_and_stops_new_ones() {
+    let harness = start_host().await;
+    let client = new_client().await;
+    let session = connect(&harness, &client, Some(TOKEN)).await.unwrap();
+    let mut socket = open_websocket(&session).await.unwrap();
+    echo(&mut socket, b"hello").await;
+
+    harness.registry.set_websocket(WebSocketSettings {
+        enabled: false,
+        origin_header: OriginHeader::Rewrite,
+    });
+    expect_closed(&mut socket).await;
+    assert!(open_websocket(&session).await.is_err());
+    let (status, _, _) = read_all(&session, "/file", Some("bytes=0-9")).await;
+    assert_eq!(status, 206);
+    session.close().await;
+
+    let session = connect(&harness, &client, None).await.unwrap();
+    assert!(!session.supports_websocket());
+    match session.open_websocket("/ws", vec![]).await {
+        Err(ClientError::Request { code, .. }) => assert_eq!(code, error_code::UNSUPPORTED),
+        Ok(_) => panic!("a WebSocket opened while they are switched off"),
+        Err(other) => panic!("unexpected error: {other}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn websockets_per_session_are_limited() {
+    let harness = start_host().await;
+    let client = new_client().await;
+    let session = connect(&harness, &client, Some(TOKEN)).await.unwrap();
+    let mut open = Vec::new();
+    for _ in 0..MAX_WEBSOCKETS_PER_SESSION {
+        open.push(open_websocket(&session).await.unwrap());
+    }
+    match session.open_websocket("/ws", vec![]).await {
+        Err(ClientError::Request { code, .. }) => {
+            assert_eq!(code, error_code::TOO_MANY_WEBSOCKETS)
+        }
+        Ok(_) => panic!("opened more WebSockets than the limit"),
+        Err(other) => panic!("unexpected error: {other}"),
+    }
+
+    let mut first = open.remove(0);
+    first.send.finish().unwrap();
+    expect_closed(&mut first).await;
+    let mut socket = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(socket) = open_websocket(&session).await {
+                return socket;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("a closed WebSocket did not free its slot");
+    echo(&mut socket, b"slot").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_a_device_closes_its_websockets() {
+    let harness = start_host().await;
+    let client = new_client().await;
+    let session = connect(&harness, &client, Some(TOKEN)).await.unwrap();
+    let mut socket = open_websocket(&session).await.unwrap();
+    echo(&mut socket, b"hello").await;
+    harness.registry.revoke_all();
+    expect_closed(&mut socket).await;
+    tokio::time::timeout(Duration::from_secs(10), session.connection().closed())
+        .await
+        .expect("session stayed open after revocation");
 }

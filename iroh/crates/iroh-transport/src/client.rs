@@ -14,8 +14,8 @@ use crate::net::{PathReport, current_path};
 use crate::policy::TransportPolicy;
 use crate::protocol::{
     ALPN, AuthOutcome, AuthRequest, BodyMode, Header, Hello, HttpRequest, HttpResponse,
-    MAX_CONTROL_FRAME_BYTES, MAX_HTTP_FRAME_BYTES, Message, PROTOCOL_VERSION, Ping, close_code,
-    error_code, validate_http_request, validate_http_response,
+    MAX_CONTROL_FRAME_BYTES, MAX_HTTP_FRAME_BYTES, Message, PROTOCOL_VERSION, Ping, WEBSOCKET,
+    close_code, error_code, validate_http_request, validate_http_response,
 };
 
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -44,12 +44,26 @@ pub struct ClientResponse {
     pub body: RecvStream,
 }
 
+/// An open WebSocket: raw WebSocket bytes flow over `send` and `recv` after the 101 in `head`.
+pub struct ClientWebSocket {
+    pub head: HttpResponse,
+    pub send: SendStream,
+    pub recv: RecvStream,
+}
+
+pub enum WebSocketReply {
+    Open(ClientWebSocket),
+    /// The origin answered the upgrade with an ordinary response, for example 403.
+    Refused(ClientResponse),
+}
+
 pub struct ClientSession {
     connection: Connection,
     /// Held open for the session's lifetime; finishing it ends the session.
     control: Mutex<(SendStream, RecvStream)>,
     outcome: AuthOutcome,
     transport_policy: TransportPolicy,
+    host_capabilities: Vec<String>,
     next_request: AtomicU64,
 }
 
@@ -71,7 +85,7 @@ impl ClientSession {
         let hello = Message::Hello(Hello {
             protocol: PROTOCOL_VERSION,
             name: device_name.to_owned(),
-            capabilities: Vec::new(),
+            capabilities: vec![WEBSOCKET.to_owned()],
         });
         let auth = Message::AuthRequest(AuthRequest {
             protocol: PROTOCOL_VERSION,
@@ -105,8 +119,14 @@ impl ClientSession {
             control: Mutex::new((send, recv)),
             outcome: result.outcome,
             transport_policy: result.transport_policy,
+            host_capabilities: result.capabilities,
             next_request: AtomicU64::new(1),
         })
+    }
+
+    /// Whether the host announced that it forwards WebSockets on this connection.
+    pub fn supports_websocket(&self) -> bool {
+        self.host_capabilities.iter().any(|name| name == WEBSOCKET)
     }
 
     pub fn outcome(&self) -> AuthOutcome {
@@ -167,6 +187,7 @@ impl ClientSession {
                 BodyMode::None
             },
             content_length: body.as_ref().map(|bytes| bytes.len() as u64),
+            upgrade: None,
         };
         validate_http_request(&request).map_err(|problem| ClientError::Request {
             code: error_code::BAD_REQUEST.into(),
@@ -205,6 +226,69 @@ impl ClientSession {
                 validate_http_response(&head)
                     .map_err(|problem| ClientError::Protocol(problem.into()))?;
                 Ok(ClientResponse { head, body: recv })
+            }
+            Message::StreamError(error) => Err(ClientError::Request {
+                code: error.code,
+                message: error.message,
+            }),
+            _ => Err(ClientError::Protocol("expected HTTP_RESPONSE".into())),
+        }
+    }
+
+    /// Asks the host to open a WebSocket to `path`. `headers` are the browser's upgrade headers,
+    /// including `sec-websocket-key`; the host adds the connection and upgrade headers itself.
+    pub async fn open_websocket(
+        &self,
+        path: &str,
+        headers: Vec<Header>,
+    ) -> Result<WebSocketReply, ClientError> {
+        if !self.supports_websocket() {
+            return Err(ClientError::Request {
+                code: error_code::UNSUPPORTED.into(),
+                message: "the host does not forward WebSockets".into(),
+            });
+        }
+        let request = HttpRequest {
+            request_id: format!("w{}", self.next_request.fetch_add(1, Ordering::Relaxed)),
+            method: "GET".into(),
+            path: path.to_owned(),
+            headers,
+            body: BodyMode::None,
+            content_length: None,
+            upgrade: Some(WEBSOCKET.into()),
+        };
+        validate_http_request(&request).map_err(|problem| ClientError::Request {
+            code: error_code::BAD_REQUEST.into(),
+            message: problem.into(),
+        })?;
+        let (mut send, mut recv) = self
+            .connection
+            .open_bi()
+            .await
+            .map_err(|error| ClientError::Connection(error.to_string()))?;
+        write_frame(
+            &mut send,
+            &Message::HttpRequest(request),
+            MAX_HTTP_FRAME_BYTES,
+        )
+        .await
+        .map_err(|error| ClientError::Connection(error.to_string()))?;
+        let reply = timeout(
+            RESPONSE_HEADER_TIMEOUT,
+            read_frame(&mut recv, MAX_HTTP_FRAME_BYTES),
+        )
+        .await
+        .map_err(|_| ClientError::Timeout)?
+        .map_err(|error| ClientError::Protocol(error.to_string()))?;
+        match reply {
+            Message::HttpResponse(head) => {
+                validate_http_response(&head)
+                    .map_err(|problem| ClientError::Protocol(problem.into()))?;
+                if head.status == 101 {
+                    return Ok(WebSocketReply::Open(ClientWebSocket { head, send, recv }));
+                }
+                let _ = send.finish();
+                Ok(WebSocketReply::Refused(ClientResponse { head, body: recv }))
             }
             Message::StreamError(error) => Err(ClientError::Request {
                 code: error.code,

@@ -39,12 +39,15 @@ pub async fn run(
     let endpoint = bind_endpoint(secret_key, vec![ALPN.to_vec()], options)
         .await
         .map_err(|error| format!("could not start the Iroh endpoint: {error}"))?;
+    let websocket = state.websocket();
     info!(
         endpoint_id = %endpoint.id(),
         origin = %config.origin.display(),
         policy = policy.as_str(),
         enforcement = policy.enforcement(),
         relay = ?config.relay,
+        websockets = websocket.enabled,
+        websocket_origin = websocket.origin_header.as_str(),
         "host started"
     );
     if policy == TransportPolicy::RelayOnly {

@@ -52,6 +52,11 @@ fn serve_command(args: &RunArgs) -> Result<(), String> {
     let _lock = DataDirLock::acquire(&config.data_dir).map_err(|error| error.to_string())?;
     let state =
         HostState::open(&config.state_path(), config.policy).map_err(|error| error.to_string())?;
+    if config.websockets_enabled.is_some() || config.websocket_origin.is_some() {
+        state
+            .set_websocket(config.websockets_enabled, config.websocket_origin)
+            .map_err(|error| error.to_string())?;
+    }
     // Target filters match by prefix, so `iroh=warn` alone would also silence iroh_host and iroh_transport.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("info,iroh=warn,noq=warn,iroh_host=info,iroh_transport=info")
@@ -221,6 +226,31 @@ fn doctor(args: &RunArgs) -> ExitCode {
             "disabled; devices must reach this host on a direct address",
         ),
     }
+    let websocket_source = |configured: bool| {
+        if configured {
+            "configured"
+        } else {
+            "default unless state.json overrides"
+        }
+    };
+    match config.websockets_enabled {
+        Some(false) => report.warn(
+            "websockets",
+            "off (configured); WebSocket connections are refused and apps fall back to plain HTTP",
+        ),
+        enabled => report.ok(
+            "websockets",
+            format!("on ({})", websocket_source(enabled.is_some())),
+        ),
+    }
+    report.ok(
+        "websocket origin",
+        format!(
+            "{} ({})",
+            config.websocket_origin.unwrap_or_default().as_str(),
+            websocket_source(config.websocket_origin.is_some())
+        ),
+    );
     match &config.control {
         Some(control) if control.listen.ip().is_loopback() => {
             report.ok("control API", format!("v1 on {}", control.listen))

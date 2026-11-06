@@ -9,6 +9,9 @@ pub const ALPN: &[u8] = b"jellyfin-iroh/1";
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Capability announced in HELLO and AUTH_RESULT, and the only accepted `upgrade` value.
+pub const WEBSOCKET: &str = "websocket";
+
 /// Upper bound for control-stream frames (HELLO, AUTH, PING).
 pub const MAX_CONTROL_FRAME_BYTES: usize = 16 * 1024;
 
@@ -39,6 +42,7 @@ pub mod error_code {
     pub const UPSTREAM_TIMEOUT: &str = "upstream_timeout";
     pub const REVOKED: &str = "revoked";
     pub const SHUTTING_DOWN: &str = "shutting_down";
+    pub const TOO_MANY_WEBSOCKETS: &str = "too_many_websockets";
 }
 
 /// Application-level QUIC close codes. Stream resets use these values too.
@@ -101,6 +105,9 @@ pub struct AuthResult {
     #[serde(default)]
     pub reason: Option<String>,
     pub transport_policy: TransportPolicy,
+    /// Optional features this host serves on the connection, such as `websocket`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +130,10 @@ pub struct HttpRequest {
     pub body: BodyMode,
     #[serde(default)]
     pub content_length: Option<u64>,
+    /// `websocket` when the request opens a WebSocket. After a 101 response the stream carries raw
+    /// WebSocket bytes in both directions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,6 +195,14 @@ pub fn validate_http_request(request: &HttpRequest) -> Result<(), &'static str> 
         }
         _ => {}
     }
+    if let Some(upgrade) = &request.upgrade {
+        if upgrade != WEBSOCKET {
+            return Err("only websocket upgrades are supported");
+        }
+        if request.method != "GET" || request.body != BodyMode::None {
+            return Err("a websocket upgrade must be a GET without a body");
+        }
+    }
     Ok(())
 }
 
@@ -207,6 +226,7 @@ mod tests {
             headers: vec![("range".into(), "bytes=0-99".into())],
             body: BodyMode::None,
             content_length: None,
+            upgrade: None,
         }
     }
 
@@ -234,11 +254,48 @@ mod tests {
             outcome: AuthOutcome::Paired,
             reason: None,
             transport_policy: TransportPolicy::P2pOnly,
+            capabilities: vec![],
         });
         assert_eq!(
             serde_json::to_value(message).unwrap(),
             json!({"type": "AUTH_RESULT", "outcome": "paired", "reason": null, "transport_policy": "p2p_only"})
         );
+    }
+
+    #[test]
+    fn websocket_fields_are_optional_on_the_wire() {
+        let message: Message = serde_json::from_value(json!({
+            "type": "AUTH_RESULT", "outcome": "authorized", "transport_policy": "auto",
+            "capabilities": ["websocket"]
+        }))
+        .unwrap();
+        let Message::AuthResult(result) = message else {
+            panic!("expected AUTH_RESULT");
+        };
+        assert_eq!(result.capabilities, vec![WEBSOCKET.to_owned()]);
+
+        let mut upgrade = request("/socket");
+        upgrade.upgrade = Some(WEBSOCKET.into());
+        let value = serde_json::to_value(Message::HttpRequest(upgrade)).unwrap();
+        assert_eq!(value["upgrade"], "websocket");
+        let old = serde_json::to_value(Message::HttpRequest(request("/socket"))).unwrap();
+        assert!(old.get("upgrade").is_none());
+    }
+
+    #[test]
+    fn checks_websocket_upgrades() {
+        let mut upgrade = request("/socket");
+        upgrade.upgrade = Some(WEBSOCKET.into());
+        assert!(validate_http_request(&upgrade).is_ok());
+        let mut other = upgrade.clone();
+        other.upgrade = Some("h2c".into());
+        assert!(validate_http_request(&other).is_err());
+        let mut post = upgrade.clone();
+        post.method = "POST".into();
+        assert!(validate_http_request(&post).is_err());
+        let mut with_body = upgrade;
+        with_body.body = BodyMode::Stream;
+        assert!(validate_http_request(&with_body).is_err());
     }
 
     #[test]

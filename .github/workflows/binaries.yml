@@ -1,11 +1,17 @@
 name: Binaries
 
-# Pushing a tag such as v0.3.0 builds, tests and publishes a GitHub Release.
-# Running the workflow manually only builds downloadable artifacts.
+# Publishes a GitHub Release either when a tag such as v0.3.0 is pushed, or when the workflow is
+# run manually with "publish" ticked, in which case the tag is created from the project version.
+# A manual run without "publish" only builds downloadable artifacts.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a release tagged v<project version> from this commit
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,6 +37,22 @@ jobs:
         run: |
           version=$(bash scripts/ci/check-version.sh "$TAG")
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Fails before any building, so a version that was already released is never overwritten.
+      - name: Manual publish is allowed
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::Publishing is only allowed from the $DEFAULT_BRANCH branch."
+            exit 1
+          fi
+          if [ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]; then
+            echo "::error::v$VERSION is already released. Raise the version (see README, Making a release) and run again."
+            exit 1
+          fi
 
   linux:
     name: Linux ${{ matrix.target }}
@@ -183,8 +205,7 @@ jobs:
 
   release:
     name: Publish release
-    # Only tag pushes publish; manual runs stop at the artifacts above.
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     needs: [version, linux, android, plugin]
     runs-on: ubuntu-24.04
     permissions:
@@ -209,12 +230,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', needs.version.outputs.version) }}
         run: |
+          # A pushed tag must already exist; a manual publish creates it on the commit that was built.
+          tag_args=(--verify-tag)
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then tag_args=(--target "$GITHUB_SHA"); fi
           prerelease=()
           if [[ $TAG == *-* ]]; then prerelease=(--prerelease); fi
           gh release create "$TAG" ./* \
-            --verify-tag \
+            "${tag_args[@]}" \
             --title "$TAG" \
             --generate-notes \
             "${prerelease[@]}"

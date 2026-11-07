@@ -68,7 +68,7 @@ sha256sum -c --ignore-missing SHA256SUMS
 
 The Linux builds pass the same end-to-end test as CI before publishing. The Android builds are compiled but not run in CI. The test client is for development and testing only.
 
-For a test build without a release, run the **Binaries** workflow from the Actions tab (Run workflow). The same files are attached to that run as artifacts.
+For a test build without a release, run the **Binaries** workflow from the Actions tab (Run workflow) with **publish** unticked. The same files are attached to that run as artifacts.
 
 ### Making a release
 
@@ -76,10 +76,12 @@ One version number covers the whole project. To release `X.Y.Z`:
 
 1. Set `version = "X.Y.Z"` in `iroh/Cargo.toml` and run `cargo update --workspace` in `iroh/` so `Cargo.lock` follows.
 2. Set the plugin version to `X.Y.Z.0` in `jellyfin-plugin/meta.json` and in `AssemblyVersion` and `FileVersion` in `Jellyfin.Plugin.Iroh.csproj`.
-3. Run `scripts/ci/check-version.sh` and commit.
-4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Run `scripts/ci/check-version.sh` and commit to the default branch.
+4. Start the release, either way:
+   - From the Actions tab: **Binaries**, Run workflow on the default branch, tick **publish**. The workflow creates the `vX.Y.Z` tag on that commit.
+   - From git: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
-The **Binaries** workflow then checks that every version matches the tag, builds and tests all platforms and the plugin, and publishes the release with generated notes. If any step fails, nothing is published. Tags with a suffix, such as `v0.4.0-beta.1`, are marked as pre-releases; their plugin version is still `0.4.0.0`.
+The **Binaries** workflow then checks that every version agrees (and matches the tag), builds and tests all platforms and the plugin, and publishes the release with generated notes. If any step fails, nothing is published and no tag is created by a manual run. A manual publish stops straight away if that version was already released. Versions with a suffix, such as `0.4.0-beta.1`, are marked as pre-releases; their plugin version is still `0.4.0.0`.
 
 ## Building the host without Docker
 

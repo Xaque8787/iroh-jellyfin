@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "iroh-host"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "clap",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "iroh-transport"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",

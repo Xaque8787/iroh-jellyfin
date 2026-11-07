@@ -27,6 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Versions agree
+        working-directory: .
+        run: bash scripts/ci/check-version.sh
+
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy

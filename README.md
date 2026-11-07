@@ -52,16 +52,34 @@ To pair a test device from another machine, use `iroh-test-client pair '<link>'`
 
 ## Prebuilt binaries
 
-Run the **Binaries** workflow from the Actions tab (Run workflow). Each run uploads a tarball per platform containing `iroh-host` and `iroh-test-client`, with a `.sha256` checksum:
+Download them from the repository's **Releases** page. Each release has one tarball per platform containing `iroh-host` and `iroh-test-client`, the Jellyfin plugin as a zip, a `.sha256` file for each, and a combined `SHA256SUMS`:
 
-| Artifact | Runs on |
+| File | Runs on |
 |---|---|
-| `jellyfin-iroh-x86_64-unknown-linux-musl` | Any 64-bit x86 Linux (static, no glibc requirement) |
-| `jellyfin-iroh-aarch64-unknown-linux-musl` | Any 64-bit ARM Linux, for example a Raspberry Pi 4/5 |
-| `jellyfin-iroh-android-arm64-v8a` | 64-bit Android 7+ (`adb shell` or Termux) |
-| `jellyfin-iroh-android-armeabi-v7a` | 32-bit Android 7+, common on Android TV devices |
+| `jellyfin-iroh-<version>-x86_64-unknown-linux-musl.tar.gz` | Any 64-bit x86 Linux (static, no glibc requirement) |
+| `jellyfin-iroh-<version>-aarch64-unknown-linux-musl.tar.gz` | Any 64-bit ARM Linux, for example a Raspberry Pi 4/5 |
+| `jellyfin-iroh-<version>-android-arm64-v8a.tar.gz` | 64-bit Android 7+ (`adb shell` or Termux) |
+| `jellyfin-iroh-<version>-android-armeabi-v7a.tar.gz` | 32-bit Android 7+, common on Android TV devices |
+| `jellyfin-iroh-<version>-jellyfin-plugin.zip` | Jellyfin 12.4: unzip into the server's `plugins` directory and restart |
 
-The Linux builds pass the same end-to-end test as CI before upload. The Android builds are compiled but not run in CI. The test client is for development and testing only.
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+The Linux builds pass the same end-to-end test as CI before publishing. The Android builds are compiled but not run in CI. The test client is for development and testing only.
+
+For a test build without a release, run the **Binaries** workflow from the Actions tab (Run workflow). The same files are attached to that run as artifacts.
+
+### Making a release
+
+One version number covers the whole project. To release `X.Y.Z`:
+
+1. Set `version = "X.Y.Z"` in `iroh/Cargo.toml` and run `cargo update --workspace` in `iroh/` so `Cargo.lock` follows.
+2. Set the plugin version to `X.Y.Z.0` in `jellyfin-plugin/meta.json` and in `AssemblyVersion` and `FileVersion` in `Jellyfin.Plugin.Iroh.csproj`.
+3. Run `scripts/ci/check-version.sh` and commit.
+4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+The **Binaries** workflow then checks that every version matches the tag, builds and tests all platforms and the plugin, and publishes the release with generated notes. If any step fails, nothing is published. Tags with a suffix, such as `v0.4.0-beta.1`, are marked as pre-releases; their plugin version is still `0.4.0.0`.
 
 ## Building the host without Docker
 

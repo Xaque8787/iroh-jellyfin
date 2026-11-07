@@ -1,7 +1,10 @@
 name: Binaries
 
-# Manually triggered builds of iroh-host and iroh-test-client for download.
+# Pushing a tag such as v0.3.0 builds, tests and publishes a GitHub Release.
+# Running the workflow manually only builds downloadable artifacts.
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -14,8 +17,24 @@ env:
   ANDROID_API: "24"
 
 jobs:
+  version:
+    name: Version check
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: All versions agree with each other and the tag
+        id: check
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          version=$(bash scripts/ci/check-version.sh "$TAG")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   linux:
     name: Linux ${{ matrix.target }}
+    needs: version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -52,13 +71,15 @@ jobs:
           CC: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }} -p iroh-host --bins
 
-      - name: Binaries are static and run
+      - name: Binaries are static and report the release version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -eux
           dir=target/${{ matrix.target }}/release
           for b in iroh-host iroh-test-client; do
             file "$dir/$b" | grep -Eq 'statically linked|static-pie linked'
-            "$dir/$b" --version
+            "$dir/$b" --version | grep -F "$VERSION"
           done
 
       - name: End-to-end test with the release binaries
@@ -76,6 +97,7 @@ jobs:
 
   android:
     name: Android ${{ matrix.abi }}
+    needs: version
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -122,3 +144,77 @@ jobs:
           name: jellyfin-iroh-android-${{ matrix.abi }}
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
+
+  plugin:
+    name: Jellyfin plugin
+    needs: version
+    runs-on: ubuntu-24.04
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: jellyfin-plugin/global.json
+
+      - name: Test
+        run: dotnet test jellyfin-plugin/Jellyfin.Plugin.Iroh.Tests/Jellyfin.Plugin.Iroh.Tests.csproj -c Release
+
+      # The zip holds the JellyfinIroh_<version> folder that goes into Jellyfin's plugins directory.
+      - name: Build and package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eux
+          dotnet publish jellyfin-plugin/Jellyfin.Plugin.Iroh/Jellyfin.Plugin.Iroh.csproj -c Release -o "$RUNNER_TEMP/publish"
+          sh docker/package-plugin.sh "$RUNNER_TEMP/publish" jellyfin-plugin/meta.json "$RUNNER_TEMP/plugin"
+          name="jellyfin-iroh-$VERSION-jellyfin-plugin.zip"
+          mkdir -p "$RUNNER_TEMP/dist"
+          (cd "$RUNNER_TEMP/plugin" && zip -r "$RUNNER_TEMP/dist/$name" .)
+          (cd "$RUNNER_TEMP/dist" && sha256sum "$name" > "$name.sha256")
+          unzip -l "$RUNNER_TEMP/dist/$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-iroh-jellyfin-plugin
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    # Only tag pushes publish; manual runs stop at the artifacts above.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [version, linux, android, plugin]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: jellyfin-iroh-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify checksums and write SHA256SUMS
+        working-directory: dist
+        run: |
+          set -eux
+          sha256sum -c ./*.sha256
+          cat ./*.sha256 | sort -k 2 > SHA256SUMS
+          ls -l
+
+      - name: Create release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=()
+          if [[ $TAG == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$TAG" ./* \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes \
+            "${prerelease[@]}"

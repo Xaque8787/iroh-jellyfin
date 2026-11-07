@@ -55,7 +55,7 @@ Non-2xx responses carry:
 {
   "control_api": 1,
   "transport_protocol": 1,
-  "host_version": "0.1.0",
+  "host_version": "0.3.0",
   "endpoint_id": "2118dc05...",
   "origin": "http://127.0.0.1:8096/",
   "relay": {"mode": "default", "url": null},

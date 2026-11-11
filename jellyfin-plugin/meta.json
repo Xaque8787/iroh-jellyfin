@@ -8,7 +8,7 @@
   "owner": "jellyfin-iroh",
   "targetAbi": "12.4.0.0",
   "timestamp": "2026-11-03T00:00:00.0000000Z",
-  "version": "0.3.0.0",
+  "version": "0.4.0.0",
   "status": "Active",
   "autoUpdate": false,
   "assemblies": [

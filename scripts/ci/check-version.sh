@@ -24,7 +24,7 @@ expect() {
   fi
 }
 
-for crate in iroh-host iroh-transport; do
+for crate in iroh-host iroh-transport iroh-client iroh-client-android; do
   locked=$(awk -v n="$crate" '$0 == "name = \"" n "\"" { getline; gsub(/version = |"/, ""); print }' "$root/iroh/Cargo.lock")
   expect "iroh/Cargo.lock ($crate)" "$locked" "$version"
 done

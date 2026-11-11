@@ -1,6 +1,5 @@
 plugins { id("com.android.library"); id("org.jetbrains.kotlin.android"); id("maven-publish") }
 group = "io.github.xaque8787"
-version = "0.1.0"
 android {
     namespace = "io.github.xaque8787.iroh"
     compileSdk = 35

@@ -153,3 +153,19 @@ CLI and the Android SDK. See [Android SDK integration](docs/android/README.md) f
 AAR installation, typed Kotlin APIs, security, lifecycle and media compatibility,
 and [implementation plan](docs/android/implementation-plan.md) for architecture.
 The separate **Android SDK** workflow builds the AAR and independent sample.
+
+### Coordinated releases
+
+Starting with v0.4.0, host/CLI binaries, the Jellyfin plugin and Android SDK share
+one project release version. **Binaries** also runs the reusable Android SDK
+workflow and waits for its emulator tests. Successful publishing attaches the
+versioned `.aar`, its POM and checksums directly to the GitHub Release alongside
+the executable archives and plugin zip; Maven Central is not required.
+
+Update `iroh/Cargo.toml` and the plugin versions, run `cargo update --workspace`
+in `iroh/`, then `bash scripts/ci/check-version.sh`. The Android version and file
+names follow the workspace version automatically. Merge to `main`, wait for Build
+Validation and Android SDK checks, then push the matching `vX.Y.Z` tag (or run
+**Binaries** on `main` with **Publish** selected). Release tags must point to a
+commit on the default branch. Manual builds with **Publish** unchecked remain
+available on development branches.

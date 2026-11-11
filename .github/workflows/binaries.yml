@@ -1,6 +1,6 @@
 name: Binaries
 
-# Publishes a GitHub Release either when a tag such as v0.3.0 is pushed, or when the workflow is
+# Publishes a GitHub Release either when a tag such as v0.4.0 is pushed, or when the workflow is
 # run manually with "publish" ticked, in which case the tag is created from the project version.
 # A manual run without "publish" only builds downloadable artifacts.
 on:
@@ -30,6 +30,8 @@ jobs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: All versions agree with each other and the tag
         id: check
         env:
@@ -37,6 +39,12 @@ jobs:
         run: |
           version=$(bash scripts/ci/check-version.sh "$TAG")
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Release tags must belong to the default branch
+        if: github.ref_type == 'tag'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"
 
       # Fails before any building, so a version that was already released is never overwritten.
       - name: Manual publish is allowed
@@ -203,10 +211,15 @@ jobs:
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
 
+  sdk:
+    name: Android SDK and emulator validation
+    needs: version
+    uses: ./.github/workflows/android-sdk.yml
+
   release:
     name: Publish release
     if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.publish)
-    needs: [version, linux, android, plugin]
+    needs: [version, linux, android, plugin, sdk]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -224,6 +237,13 @@ jobs:
           sha256sum -c ./*.sha256
           cat ./*.sha256 | sort -k 2 > SHA256SUMS
           ls -l
+
+      - name: SDK release assets are present
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          test -s "dist/iroh-client-android-$VERSION.aar"
+          test -s "dist/iroh-client-android-$VERSION.pom"
 
       - name: Create release
         working-directory: dist

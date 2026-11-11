@@ -20,7 +20,7 @@ The host, invitation format, protocol and Jellyfin plugin need no changes.
    stripped before forwarding. Reject requests outside that namespace, including
    upgrades. CLI keeps its existing unprefixed URL behavior. No wildcard listener.
 5. Package arm64-v8a, armeabi-v7a and x86_64, API 24+, namespace
-   `io.github.xaque8787.iroh`, SDK version 0.1.0 (independent of host 0.3.0).
+   `io.github.xaque8787.iroh`, SDK version 0.4.0, aligned with the coordinated host/plugin release.
 6. Build AAR, independent sample, native lifecycle tests and CI; distinguish native
    Linux tests, Android compilation and actual emulator/device behavior.
 

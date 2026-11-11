@@ -1,4 +1,4 @@
-# Iroh Client Android SDK 0.1.0
+# Iroh Client Android SDK 0.4.0
 
 Transport for existing Android HTTP clients and players. The SDK pairs with the
 unchanged protocol-v1 host and exposes its HTTP origin through an embedded loopback
@@ -6,24 +6,27 @@ proxy. It does not decode media, transcode, host Jellyfin, or require a terminal
 
 ## Artifact and requirements
 
-- Artifact: `iroh-client-android-0.1.0.aar`; namespace `io.github.xaque8787.iroh`.
+- Artifact: `iroh-client-android-0.4.0.aar`; namespace `io.github.xaque8787.iroh`.
 - Kotlin 2.1.20+ consumer toolchain; compiled JVM target 17.
 - Minimum Android API 24, arm64-v8a, armeabi-v7a and x86_64. No 32-bit x86 build:
   modern emulators use x86_64, and real 32-bit ARM devices use armeabi-v7a.
-- SDK versions are independent of host releases. SDK 0.1.0 speaks protocol v1 to
-  the existing host 0.3.0. No invitation or authorization format has changed.
+- SDK, host/CLI and plugin releases now share the project version. SDK 0.4.0
+  still speaks protocol v1 and remains compatible with host 0.3.0. The invitation
+  and authorization formats are unchanged.
 - Kotlin suspend APIs use coroutines; all JNI/network work runs on Dispatchers.IO.
   A bare AAR does not carry Maven transitive dependency metadata. Add the coroutine
   runtime below. Kotlin's normal Android plugin supplies the Kotlin standard library.
   No Rust installation, JNA, native pointer handling or separate .so download is needed.
 
-Download the `iroh-client-android-0.1.0` artifact from the **Android SDK** Actions
-workflow and extract it. Check the included SHA-256 file. Place the AAR in `app/libs`:
+Download `iroh-client-android-0.4.0.aar` directly from the project's
+[GitHub Releases](https://github.com/Xaque8787/iroh-jellyfin/releases). Verify its
+accompanying SHA-256 checksum and place the AAR in `app/libs`. Development builds
+are also available in the **Android SDK** workflow's versioned artifact:
 
 ```kotlin
 plugins { id("org.jetbrains.kotlin.android") }
 dependencies {
-    implementation(files("libs/iroh-client-android-0.1.0.aar"))
+    implementation(files("libs/iroh-client-android-0.4.0.aar"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
 ```
@@ -233,12 +236,13 @@ cd android
 ./gradlew :sample:assembleDebug :iroh-client:assembleDebugAndroidTest
 ```
 
-Outputs: `dist/iroh-client-android-0.1.0.aar`, POM and checksum; native libraries
+Outputs: `dist/iroh-client-android-0.4.0.aar`, POM and checksum; native libraries
 remain in `android/iroh-client/src/main/jniLibs/<abi>/libiroh_client.so`. ELF
 architecture, JNI export and 16 KiB load alignment are checked before packaging;
 AAR contents are checked afterward. Do not distribute an AAR built before all ABI
-checks pass. Future SDK version changes must update the Rust adapter, Gradle module,
-sample artifact reference, build scripts and artifact workflow together.
+checks pass. Release versions come from `iroh/Cargo.toml`; the Android adapter inherits that
+version, and Gradle, build scripts and workflow artifact names read it. Synchronize
+the plugin version and Cargo.lock, then run `scripts/ci/check-version.sh`.
 
 Run native validation from `iroh`: `cargo test --workspace --locked` and
 `cargo clippy --workspace --all-targets --locked -- -D warnings`. Run the existing

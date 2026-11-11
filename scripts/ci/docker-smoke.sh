@@ -34,7 +34,9 @@ echo "jellyfin healthy"
 
 # The plugin was copied into the persistent plugin directory and Jellyfin loaded it.
 ls "$work/config/plugins/"
-test -f "$work/config/plugins/JellyfinIroh_0.3.0.0/Jellyfin.Plugin.Iroh.dll"
+root=$(cd "$(dirname "$0")/../.." && pwd)
+plugin_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$root/jellyfin-plugin/meta.json")
+test -f "$work/config/plugins/JellyfinIroh_$plugin_version/Jellyfin.Plugin.Iroh.dll"
 for _ in $(seq 1 30); do
   docker logs "$name" 2>&1 | grep -E 'Loaded plugin.*Iroh Remote Access' > /dev/null && break
   sleep 1

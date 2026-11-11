@@ -1,14 +1,16 @@
 name: Android SDK
 on:
   push:
+    branches: ["**"]
     paths: ['iroh/**', 'android/**', 'scripts/android/**', '.github/workflows/android-sdk.yml']
   pull_request:
     paths: ['iroh/**', 'android/**', 'scripts/android/**', '.github/workflows/android-sdk.yml']
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: android-sdk-${{ github.ref }}
+  group: android-sdk-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   aar:
@@ -16,7 +18,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
+      - name: Release version
+        id: version
+        run: |
+          version=$(bash scripts/ci/check-version.sh)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -38,6 +45,7 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: sdk-${{ runner.os }}-${{ hashFiles('iroh/Cargo.lock', 'android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: sdk-${{ runner.os }}-
       - name: Emulator invitation fixture tests
         run: python3 -m unittest discover -s scripts/android -p 'test_*.py'
       - name: Rust tests and lint
@@ -55,9 +63,9 @@ jobs:
         run: ./gradlew :sample:assembleDebug :iroh-client:assembleDebugAndroidTest
       - uses: actions/upload-artifact@v4
         with:
-          name: iroh-client-android-0.1.0
+          name: iroh-client-android-${{ steps.version.outputs.version }}
           path: |
-            dist/*
+            dist/iroh-client-android-${{ steps.version.outputs.version }}.*
             android/iroh-client/src/main/jniLibs/*/*.so
             android/sample/build/outputs/apk/debug/*.apk
           if-no-files-found: error
@@ -74,6 +82,13 @@ jobs:
           profile: pixel_2
           disable-animations: true
           script: bash scripts/android/emulator-e2e.sh
+      # Release payload is uploaded only after the emulator test succeeds.
+      - name: Upload SDK release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-iroh-android-sdk
+          path: dist/iroh-client-android-${{ steps.version.outputs.version }}.*
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

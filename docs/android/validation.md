@@ -71,3 +71,17 @@ HTTP rules and named pairing/proxy/restart stages were added. The revised
 instrumentation APK compiles. An emulator rerun is still needed to confirm whether
 restoring the real routes resolves the observed reconnect timeout; the supplied
 log alone does not establish the underlying Iroh/NAT failure mechanism.
+
+## Coordinated v0.4.0 release preparation
+
+The subsequent [Android SDK CI run on ec03fba](https://github.com/Xaque8787/iroh-jellyfin/actions/runs/43069698601)
+succeeded, including emulator tests. Build Validation and the manually run
+Binaries workflow also passed on that source revision.
+
+For the coordinated v0.4.0 release, the workspace crates and plugin versions were
+aligned; the Android module, sample and artifact scripts now derive their version
+from the workspace. Local checks passed: 96 Rust tests, 10 plugin tests, Clippy,
+formatting, the existing CLI e2e script, fixture tests, and actionlint. The
+three-ABI 0.4.0 AAR built and passed ELF/JNI/16 KiB and artifact checks. The release
+workflow calls the SDK workflow and requires its emulator job to succeed before
+publishing; CI validation of the final main commit is recorded by GitHub Actions.

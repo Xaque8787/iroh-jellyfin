@@ -22,3 +22,6 @@ iroh/target/
 dist/
 android/iroh-client/libs/
 android/iroh-client/src/main/res/xml/iroh_network_security_config.xml
+
+# Python fixture-test caches
+__pycache__/

@@ -12,6 +12,12 @@ import java.net.URL
 
 @RunWith(AndroidJUnit4::class)
 class ClientLifecycleTest {
+    private suspend fun <T> stage(name: String, action: suspend () -> T): T = try {
+        action()
+    } catch (error: Exception) {
+        throw AssertionError("Android SDK stage failed: $name", error)
+    }
+
     @Test fun nativeLifecycleAndStorage() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val storage = File(context.noBackupFilesDir, "test-${System.nanoTime()}")
@@ -35,9 +41,9 @@ class ClientLifecycleTest {
         val storage = File(context.noBackupFilesDir, "pair-${System.nanoTime()}")
         val client = IrohClient.initialize(context, IrohConfig(storage, relayUrl = "none"))
         try {
-            client.pair(requireNotNull(invite))
-            val connection = client.startProxy()
-            assertEquals(connection, client.startProxy())
+            stage("pair invitation") { client.pair(requireNotNull(invite)) }
+            val connection = stage("start proxy after pairing") { client.startProxy() }
+            assertEquals(connection, stage("reuse running proxy") { client.startProxy() })
             val http = URL(connection.proxyUrl + "movie.bin").openConnection() as HttpURLConnection
             http.setRequestProperty("Range", "bytes=10-19")
             http.connectTimeout = 15000; http.readTimeout = 15000
@@ -48,7 +54,7 @@ class ClientLifecycleTest {
             assertEquals(AuthorizationStatus.AUTHORIZED, client.getStatus().authorization)
             client.notifyNetworkChange()
             client.stopProxy()
-            assertNotEquals(connection.proxyUrl, client.startProxy().proxyUrl)
+            assertNotEquals(connection.proxyUrl, stage("restart proxy after stop") { client.startProxy() }.proxyUrl)
             client.forgetPairing()
         } finally { client.shutdown(); storage.deleteRecursively() }
     }

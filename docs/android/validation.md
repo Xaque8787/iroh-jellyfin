@@ -54,3 +54,20 @@ HTTP/WebSocket transport behavior, not Android player compatibility.
 
 The full Jellyfin Docker image smoke test was not rerun for this SDK change.
 Host protocol, host implementation and Jellyfin plugin source remain unchanged.
+
+## Follow-up: first emulator CI run
+
+The uploaded CI log shows that both instrumentation tests executed.
+`nativeLifecycleAndStorage` passed. `realHostRangeAndReconnect` paired successfully
+(the host logged Paired over a direct path), then failed with a connection timeout
+before another authorized session reached the host. This is a runtime failure,
+not an AAR compilation failure.
+
+The fixture previously replaced all advertised host addresses with only the
+emulator's special 10.0.2.2 alias. The correction preserves the original addresses
+and adds that alias as a fallback, with three regression tests for address/token
+preservation, duplicate aliases and missing IPv4 addresses. Test-only localhost
+HTTP rules and named pairing/proxy/restart stages were added. The revised
+instrumentation APK compiles. An emulator rerun is still needed to confirm whether
+restoring the real routes resolves the observed reconnect timeout; the supplied
+log alone does not establish the underlying Iroh/NAT failure mechanism.

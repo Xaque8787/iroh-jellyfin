@@ -38,6 +38,8 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: sdk-${{ runner.os }}-${{ hashFiles('iroh/Cargo.lock', 'android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Emulator invitation fixture tests
+        run: python3 -m unittest discover -s scripts/android -p 'test_*.py'
       - name: Rust tests and lint
         working-directory: iroh
         run: |

@@ -246,7 +246,8 @@ CLI e2e script too. With a booted Android emulator, run
 `bash scripts/android/emulator-e2e.sh` from the repository root. It starts a real
 local host/origin and passes a single-use invite to instrumentation. The test
 validates JNI initialization/storage, pairing, HTTP Range, diagnostics and repeated
-start/stop, using emulator host alias 10.0.2.2 and no public relay.
+start/stop, preserving the host's advertised addresses and adding emulator host alias 10.0.2.2
+as a fallback, with no public relay.
 
 The sample deliberately has no playback engine dependency; the Media3 integration
 snippet above is illustrative. Media3 playback, physical Android TV devices,

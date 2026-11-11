@@ -145,3 +145,11 @@ The plugin reads `JELLYFIN_IROH_CONTROL_URL`, `JELLYFIN_IROH_CONTROL_TOKEN_FILE`
 ## License
 
 MIT OR Apache-2.0
+
+## Android client SDK
+
+The embeddable client engine in `iroh/crates/iroh-client` is shared by the existing
+CLI and the Android SDK. See [Android SDK integration](docs/android/README.md) for
+AAR installation, typed Kotlin APIs, security, lifecycle and media compatibility,
+and [implementation plan](docs/android/implementation-plan.md) for architecture.
+The separate **Android SDK** workflow builds the AAR and independent sample.

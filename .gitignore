@@ -12,3 +12,13 @@ vitest.config.cjs.timestamp-*.mjs
 vitest.config.ts.timestamp-*.mjs
 vitest.config.mts.timestamp-*.mjs
 vitest.config.cts.timestamp-*.mjs
+
+# Android SDK build outputs and local configuration
+android/.gradle/
+android/**/build/
+android/local.properties
+android/iroh-client/src/main/jniLibs/
+iroh/target/
+dist/
+android/iroh-client/libs/
+android/iroh-client/src/main/res/xml/iroh_network_security_config.xml

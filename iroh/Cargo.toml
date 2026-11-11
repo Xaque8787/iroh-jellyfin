@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/iroh-transport",
     "crates/iroh-host",
+    "crates/iroh-client",
+    "crates/iroh-client-android",
 ]
 
 [workspace.package]
@@ -37,3 +39,5 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tokio-util = { version = "0.7.16", features = ["io", "rt"] }
 
 iroh-transport = { path = "crates/iroh-transport" }
+
+iroh-client = { path = "crates/iroh-client" }

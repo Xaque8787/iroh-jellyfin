@@ -22,7 +22,8 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
-          cmdline-tools-version: 11076708
+          cmdline-tools-version: 12266719
+          packages: platform-tools
       - name: Toolchains
         run: |
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy --target aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android

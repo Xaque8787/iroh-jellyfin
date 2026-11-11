@@ -36,7 +36,7 @@ echo "jellyfin healthy"
 ls "$work/config/plugins/"
 test -f "$work/config/plugins/JellyfinIroh_0.3.0.0/Jellyfin.Plugin.Iroh.dll"
 for _ in $(seq 1 30); do
-  docker logs "$name" 2>&1 | grep -Eq 'Loaded plugin.*Iroh Remote Access' && break
+  docker logs "$name" 2>&1 | grep -E 'Loaded plugin.*Iroh Remote Access' > /dev/null && break
   sleep 1
 done
 docker logs "$name" 2>&1 | grep -E 'Loaded plugin.*Iroh Remote Access'
@@ -74,7 +74,7 @@ for _ in $(seq 1 30); do
 done
 in_container 'curl -fs -H "Authorization: Bearer $(cat /iroh-data/control.token)" http://127.0.0.1:47950/v1/status' > "$work/status2.json"
 python3 -c "import json,sys; a,b=(json.load(open(p)) for p in sys.argv[1:]); assert a['endpoint_id']==b['endpoint_id'] and b['uptime_secs']<=a['uptime_secs']+5, (a,b); print('restarted ok')" "$work/status.json" "$work/status2.json"
-docker logs "$name" 2>&1 | grep -q "iroh-host exited"
+docker logs "$name" 2>&1 | grep "iroh-host exited" > /dev/null
 test "$(health)" = Healthy
 
 started=$(date +%s)

@@ -7,7 +7,9 @@ FROM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b
 ENV RUSTUP_TOOLCHAIN=1.99.1 CARGO_TERM_COLOR=never
 WORKDIR /src/iroh
 COPY iroh/ ./
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+# Optional combined CA bundle for builds behind a TLS-inspecting proxy; not stored in layers.
+RUN --mount=type=secret,id=proxy_ca,target=/etc/ssl/certs/ca-certificates.crt \
+    --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/iroh/target \
     cargo build --release --locked -p iroh-host --bin iroh-host \
     && install -D -m 0755 target/release/iroh-host /out/iroh-host
@@ -17,7 +19,12 @@ ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 WORKDIR /src/jellyfin-plugin
 COPY jellyfin-plugin/ ./
 COPY docker/package-plugin.sh /usr/local/bin/package-plugin
-RUN --mount=type=cache,target=/root/.nuget/packages \
+# Fail the image build if host, plugin metadata and assembly versions have drifted apart.
+COPY iroh/Cargo.toml iroh/Cargo.lock /src/iroh/
+COPY scripts/ci/check-version.sh /src/scripts/ci/check-version.sh
+RUN bash /src/scripts/ci/check-version.sh
+RUN --mount=type=secret,id=proxy_ca,target=/etc/ssl/certs/ca-certificates.crt \
+    --mount=type=cache,target=/root/.nuget/packages \
     dotnet publish Jellyfin.Plugin.Iroh/Jellyfin.Plugin.Iroh.csproj -c Release -o /build \
     && sh /usr/local/bin/package-plugin /build meta.json /out
 

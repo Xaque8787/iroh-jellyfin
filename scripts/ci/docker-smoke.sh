@@ -6,9 +6,17 @@
 set -euo pipefail
 
 image=$1
+root=$(cd "$(dirname "$0")/../.." && pwd)
+host_version=$(bash "$root/scripts/ci/check-version.sh")
+expected_plugin=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$root/jellyfin-plugin/meta.json")
+actual_host=$(docker run --rm --entrypoint /usr/local/bin/iroh-host "$image" --version)
+test "$actual_host" = "iroh-host $host_version"
+echo "bundled $actual_host; expected plugin $expected_plugin"
 work=$(mktemp -d)
 name=jellyfin-iroh-smoke
-mkdir -p "$work/config" "$work/cache" "$work/media" "$work/iroh-data"
+mkdir -p "$work/config/plugins/JellyfinIroh_0.0.0.0" "$work/cache" "$work/media" "$work/iroh-data"
+# Simulate a persistent installation from an older image.
+printf 'stale plugin\n' > "$work/config/plugins/JellyfinIroh_0.0.0.0/stale"
 cleanup() {
   echo "----- container log -----"
   docker logs "$name" 2>&1 | tail -n 200 || true
@@ -34,9 +42,12 @@ echo "jellyfin healthy"
 
 # The plugin was copied into the persistent plugin directory and Jellyfin loaded it.
 ls "$work/config/plugins/"
-root=$(cd "$(dirname "$0")/../.." && pwd)
-plugin_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$root/jellyfin-plugin/meta.json")
+plugin_version=$expected_plugin
 test -f "$work/config/plugins/JellyfinIroh_$plugin_version/Jellyfin.Plugin.Iroh.dll"
+test ! -e "$work/config/plugins/JellyfinIroh_0.0.0.0"
+in_container "sha256sum /opt/jellyfin-iroh/plugins/JellyfinIroh_$plugin_version/Jellyfin.Plugin.Iroh.dll | sed 's|/opt/jellyfin-iroh/plugins/|/config/plugins/|' | sha256sum --check"
+python3 -c 'import json,sys; meta=json.load(open(sys.argv[1])); assert meta["version"]==sys.argv[2], meta' \
+  "$work/config/plugins/JellyfinIroh_$plugin_version/meta.json" "$expected_plugin"
 for _ in $(seq 1 30); do
   docker logs "$name" 2>&1 | grep -E 'Loaded plugin.*Iroh Remote Access' > /dev/null && break
   sleep 1

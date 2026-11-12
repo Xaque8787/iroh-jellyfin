@@ -48,6 +48,24 @@ How the image works:
 - The plugin talks to `iroh-host` only through control API v1 on `127.0.0.1:47950` inside the container. That port is not published. The token is read from `./iroh-data/control.token`.
 - Folders next to `compose.yaml`: `./config`, `./cache`, `./media` (mounted read-only at `/media`; add it as a library), `./iroh-data`.
 
+To update an existing installation after pulling repository changes:
+
+```sh
+docker compose build --pull
+docker compose up -d --force-recreate
+# Confirm the bundled host version (currently 0.4.0):
+docker compose exec jellyfin iroh-host --version
+```
+
+The image builds the host and plugin from the checked-out source, not GitHub
+release downloads. Build-time version checks require the host, plugin assembly
+and plugin metadata versions to agree. Recreating the container installs the
+bundled plugin over the persistent copy and removes older Iroh plugin versions;
+Jellyfin configuration, media and Iroh identity remain in the existing mounts.
+The Android AAR is a client dependency and is not needed in the server image.
+The pinned Jellyfin server and its plugin SDK/ABI are updated together; `--pull`
+does not move the image to a different Jellyfin version.
+
 To pair a test device from another machine, use `iroh-test-client pair '<link>'` and `iroh-test-client proxy`, as described below.
 
 ## Prebuilt binaries

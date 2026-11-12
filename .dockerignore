@@ -10,3 +10,8 @@ cache
 media
 iroh-data
 iroh-client-data
+
+# Android consumers and their generated SDK artifacts are not part of the server image.
+android
+dist
+**/__pycache__

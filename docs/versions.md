@@ -2,6 +2,8 @@
 
 | Component | Version | Where pinned | Why |
 |---|---|---|---|
+| Host / CLI / Android SDK release | `0.4.0` | `iroh/Cargo.toml`, `iroh/Cargo.lock` | The Docker host is built from this workspace, not downloaded. Android SDK 0.4.0 uses the same protocol v1. |
+| Iroh Jellyfin plugin release | `0.4.0.0` | plugin `.csproj`, `jellyfin-plugin/meta.json` | Built from local source. Docker runs `check-version.sh` before publishing it, and startup replaces persistent older plugin copies. |
 | Iroh | `=1.4.1` | `iroh/Cargo.toml` | Current stable 1.x. The APIs used (`presets::Minimal`, `RelayMode`, `RelayMap`, `SecretKey`, `Connection::paths()`, `TransportAddr::is_relay`) were checked against the 1.4.1 source and docs.rs. The exact pin stops a minor update from silently changing behavior. |
 | Rust toolchain | `1.99.1` | `iroh/rust-toolchain.toml`, CI, Dockerfile | Current stable at time of writing. Builds are reproducible with one compiler. |
 | Rust MSRV | `1.91` | `rust-version` in `iroh/Cargo.toml`, CI `msrv` job | Iroh 1.4.1 needs edition 2024 and Rust 1.91. The host uses `File::try_lock` (stable since 1.89). |
@@ -21,3 +23,18 @@ Full digests are in the Dockerfile.
 - Upgrading Jellyfin means changing the image, the two SDK packages and `targetAbi` together.
 - `cargo update` is a deliberate change reviewed in its own commit.
 - NuGet packages are pinned to exact versions, but there is no NuGet lock file yet, so transitive packages are resolved at build time. A `packages.lock.json` can be added once it can be generated with the SDK.
+
+## Docker verification
+
+The current source produces host `0.4.0` and plugin `0.4.0.0`. The pinned Rust
+Docker stage builds successfully; the plugin publishes with the pinned .NET
+10.0.403 SDK and all 10 plugin tests pass. A runtime audit using those artifacts
+and the Dockerfile's pinned Jellyfin base passed the smoke test: healthy server,
+plugin loaded, installed DLL matches the bundle, stale plugin removed, control
+API available, host restart preserves identity, and clean shutdown.
+
+The complete multi-stage build could not be verified in the managed environment:
+the .NET registry redirects downloads to `westcentralus.data.mcr.microsoft.com`,
+which its network policy blocks. The runtime audit used the already installed
+matching .NET SDK to publish the plugin, rather than substituting an unpinned
+registry image. No production installation was modified.
